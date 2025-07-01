@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "subtitle-genius-minimal"
+version = "0.1.0"
+description = "Amazon Transcribe focused subtitle generation tool"
+authors = [{name = "Your Name", email = "your.email@example.com"}]
+license = {text = "MIT"}
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    # 核心依赖
+    "gradio>=4.40.0,<5.0.0",
+    "boto3>=1.28.0,<1.35.0",
+    "botocore>=1.31.0,<1.35.0",
+    # 音频处理（基础）
+    "ffmpeg-python>=0.2.0",
+    "pydub>=0.25.1",
+    # 工具库
+    "python-dotenv>=1.0.0",
+    "requests>=2.31.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.0.0",
+    # 字幕处理
+    "srt>=3.5.3",
+    "webvtt-py>=0.4.6",
+    # 下载工具
+    "yt-dlp>=2023.12.30",
+]
+
+[project.optional-dependencies]
+full = [
+    # 完整版本的额外依赖
+    "openai>=1.3.7",
+    "anthropic>=0.7.8",
+    "SpeechRecognition>=3.10.0",
+    # 注意：暂时排除 openai-whisper 由于兼容性问题
+]
+
+dev = [
+    "pytest>=7.4.3",
+    "black>=23.11.0",
+    "flake8>=6.1.0",
+    "mypy>=1.7.1",
+    "pytest-asyncio>=0.21.0",
+]
+
+[tool.black]
+line-length = 88
+target-version = ['py310']
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

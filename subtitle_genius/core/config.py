@@ -26,7 +26,7 @@ class Config(BaseSettings):
     audio_format: str = Field(default="wav", env="AUDIO_FORMAT")
     
     # 字幕配置
-    subtitle_language: str = Field(default="zh-CN", env="SUBTITLE_LANGUAGE")
+    subtitle_language: str = Field(default="ar", env="SUBTITLE_LANGUAGE")  # 默认使用 Arabic
     subtitle_format: str = Field(default="srt", env="SUBTITLE_FORMAT")
     max_subtitle_length: int = Field(default=80, env="MAX_SUBTITLE_LENGTH")
     

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Amazon Transcribe 集成测试脚本
+Amazon Transcribe 集成测试脚本 - 支持流式处理和Arabic语言
 """
 
 import asyncio
@@ -11,19 +11,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from subtitle_genius.models.transcribe_model import TranscribeModel
+from subtitle_genius.stream.processor import StreamProcessor
 from subtitle_genius.core.config import config
 
 
-async def test_transcribe_model():
-    """测试 Amazon Transcribe 模型"""
+async def test_transcribe_batch_mode():
+    """测试 Amazon Transcribe 批处理模式"""
     
-    print("🧪 测试 Amazon Transcribe 模型集成")
+    print("🧪 测试 Amazon Transcribe 批处理模式")
     print("=" * 50)
     
-    # 初始化模型
+    # 初始化模型 (禁用流式处理以测试批处理)
     try:
-        model = TranscribeModel(region_name=config.aws_region)
-        print(f"✅ TranscribeModel 初始化成功")
+        model = TranscribeModel(region_name=config.aws_region, use_streaming=False)
+        print(f"✅ TranscribeModel 初始化成功 (批处理模式)")
         print(f"   区域: {config.aws_region}")
         print(f"   S3存储桶: {config.aws_s3_bucket}")
     except Exception as e:
@@ -45,9 +46,7 @@ async def test_transcribe_model():
     
     # 测试音频文件路径
     test_audio_files = [
-        "test_arabic/arabic_test_audio.wav",
-        "input.webm",
-        "output.mp4"
+        "input.mp4"
     ]
     
     test_file = None
@@ -65,9 +64,9 @@ async def test_transcribe_model():
     
     print(f"\n🎵 使用测试文件: {test_file}")
     
-    # 测试转录
+    # 测试转录 (使用 Arabic 作为默认语言)
     try:
-        print("🚀 开始转录...")
+        print("🚀 开始转录 (Arabic)...")
         subtitles = await model.transcribe(test_file, language="ar")
         
         print(f"✅ 转录完成！生成了 {len(subtitles)} 条字幕")
@@ -86,11 +85,73 @@ async def test_transcribe_model():
         traceback.print_exc()
 
 
+async def test_transcribe_streaming_mode():
+    """测试 Amazon Transcribe 流式处理模式"""
+    
+    print("\n🌊 测试 Amazon Transcribe 流式处理模式")
+    print("=" * 50)
+    
+    # 初始化模型 (启用流式处理)
+    try:
+        model = TranscribeModel(region_name=config.aws_region, use_streaming=True)
+        print(f"✅ TranscribeModel 初始化成功 (流式处理模式)")
+        
+        if not model.use_streaming:
+            print("⚠️  流式处理不可用，请安装 amazon-transcribe 包:")
+            print("   pip install amazon-transcribe")
+            return
+            
+    except Exception as e:
+        print(f"❌ TranscribeModel 初始化失败: {e}")
+        return
+    
+    # 检查模型可用性
+    if not model.is_available():
+        print("❌ Amazon Transcribe 不可用")
+        return
+    
+    # 测试音频文件路径
+    test_file = "input.mp4"
+    if not Path(test_file).exists():
+        print(f"\n⚠️  未找到测试音频文件: {test_file}")
+        return
+    
+    print(f"\n🎵 使用测试文件进行流式处理: {test_file}")
+    
+    try:
+        # 创建流处理器
+        stream_processor = StreamProcessor()
+        
+        print("🚀 开始流式转录 (Arabic)...")
+        
+        # 创建音频流
+        audio_stream = stream_processor.process_file_stream(test_file)
+        
+        # 流式转录
+        subtitle_count = 0
+        async for subtitle in model.transcribe_stream(audio_stream, language="ar"):
+            subtitle_count += 1
+            print(f"📝 字幕 {subtitle_count}: [{subtitle.start:.1f}s - {subtitle.end:.1f}s] {subtitle.text}")
+            
+            # 限制显示数量以避免输出过多
+            if subtitle_count >= 10:
+                print("   ... (限制显示前10条字幕)")
+                break
+        
+        print(f"✅ 流式转录完成！共处理了 {subtitle_count} 条字幕")
+        
+    except Exception as e:
+        print(f"❌ 流式转录失败: {e}")
+        import traceback
+        traceback.print_exc()
+
+
 def test_config():
     """测试配置"""
     print("⚙️  配置检查:")
     print(f"   AWS_REGION: {config.aws_region}")
     print(f"   AWS_S3_BUCKET: {config.aws_s3_bucket}")
+    print(f"   默认语言: Arabic (ar)")
     
     # 检查环境变量
     import os
@@ -110,17 +171,20 @@ def test_config():
 
 async def main():
     """主函数"""
-    print("🎬 SubtitleGenius - Amazon Transcribe 测试")
-    print("=" * 60)
+    print("🎬 SubtitleGenius - Amazon Transcribe 测试 (Arabic + Streaming)")
+    print("=" * 70)
     
     # 测试配置
     test_config()
     print()
     
-    # 测试模型
-    await test_transcribe_model()
+    # 测试批处理模式
+    await test_transcribe_batch_mode()
     
-    print("\n" + "=" * 60)
+    # 测试流式处理模式
+    await test_transcribe_streaming_mode()
+    
+    print("\n" + "=" * 70)
     print("测试完成！")
 
 
