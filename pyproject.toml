@@ -9,7 +9,7 @@ description = "Real-time subtitle generation from MP4 live audio streams using G
 authors = [{name = "Your Name", email = "your.email@example.com"}]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 dependencies = [
     # 音频处理
     "ffmpeg-python>=0.2.0",
@@ -21,9 +21,12 @@ dependencies = [
     "anthropic>=0.7.8",
     "SpeechRecognition>=3.10.0",
     "openai-whisper>=20231117",
-    # 实时流处理
+    # AWS服务 (使用兼容版本)
+    "boto3>=1.28.0,<1.35.0",
+    "botocore>=1.31.0,<1.35.0",
+    # 实时流处理 (使用兼容版本)
     "pyaudio>=0.2.11",
-    "websockets>=12.0",
+    "websockets>=10.0,<12.0",
     # 字幕处理
     "srt>=3.5.3",
     "webvtt-py>=0.4.6",
@@ -45,13 +48,15 @@ dependencies = [
     # HTTP客户端
     "httpx>=0.25.2",
     "requests>=2.31.0",
+    # Web界面 (使用稳定版本)
+    "gradio>=5.0",
+    "yt-dlp>=2025.6.30",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",

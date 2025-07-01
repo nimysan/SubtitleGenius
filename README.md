@@ -5,7 +5,7 @@
 ## 功能特性
 
 - 🎵 实时音频流提取和处理
-- 🤖 集成多种GenAI模型 (OpenAI Whisper, GPT-4, Claude等)
+- 🤖 集成多种GenAI模型 (OpenAI Whisper, GPT-4, Claude, Amazon Transcribe等)
 - 📝 智能字幕生成和优化
 - 🎬 支持多种字幕格式 (SRT, WebVTT)
 - ⚡ 低延迟实时处理
@@ -57,6 +57,21 @@ pip install -r requirements.txt
 
 ## 快速开始
 
+### 启动 Web 界面
+
+```bash
+# 启动简化版界面（推荐）
+uv run python launch.py --simple
+
+# 或启动完整版界面
+uv run python launch.py --full
+
+# 指定端口
+uv run python launch.py --simple --port 8080
+```
+
+访问 http://127.0.0.1:7860 使用 Web 界面。
+
 ### 基本用法
 
 ```bash
@@ -75,9 +90,9 @@ uv run subtitle-genius batch --input-dir ./videos --output-dir ./subtitles
 ```python
 from subtitle_genius import SubtitleGenerator
 
-# 初始化生成器
+# 初始化生成器 - 使用 Amazon Transcribe
 generator = SubtitleGenerator(
-    model="openai-whisper",
+    model="amazon-transcribe",
     language="zh-CN"
 )
 
@@ -95,6 +110,10 @@ async for subtitle in generator.generate_realtime(audio_stream):
 
 - `OPENAI_API_KEY`: OpenAI API密钥
 - `ANTHROPIC_API_KEY`: Anthropic API密钥
+- `AWS_ACCESS_KEY_ID`: AWS访问密钥ID (用于Amazon Transcribe)
+- `AWS_SECRET_ACCESS_KEY`: AWS秘密访问密钥
+- `AWS_REGION`: AWS区域 (默认: us-east-1)
+- `AWS_S3_BUCKET`: S3存储桶名称 (默认: subtitle-genius-temp)
 - `SUBTITLE_LANGUAGE`: 字幕语言 (默认: zh-CN)
 - `AUDIO_SAMPLE_RATE`: 音频采样率 (默认: 16000)
 
@@ -131,6 +150,14 @@ make test   # 运行测试
 make format # 格式化代码
 make lint   # 代码检查
 ```
+
+## 下载视频 使用yt-dlp
+
+```bash
+yt-dlp --cookies-from-browser chrome –-merge-output-format mp4 https://youtu.be/0PggkKx9m54  
+ffmpeg -i input.webm -c:v libx264 -crf 23 -c:a aac -b:a 128k output.mp4
+```
+
 
 ## 许可证
 

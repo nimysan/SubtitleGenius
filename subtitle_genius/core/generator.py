@@ -8,6 +8,7 @@ from loguru import logger
 from ..models.whisper_model import WhisperModel
 from ..models.openai_model import OpenAIModel
 from ..models.claude_model import ClaudeModel
+from ..models.transcribe_model import TranscribeModel
 from ..audio.processor import AudioProcessor
 from ..subtitle.formatter import SubtitleFormatter
 from ..subtitle.models import Subtitle
@@ -44,6 +45,8 @@ class SubtitleGenerator:
             self.model = OpenAIModel()
         elif self.model_name == "claude":
             self.model = ClaudeModel()
+        elif self.model_name == "amazon-transcribe":
+            self.model = TranscribeModel(region_name=config.aws_region)
         else:
             raise ValueError(f"Unsupported model: {self.model_name}")
     

@@ -38,6 +38,12 @@ class Config(BaseSettings):
     real_time_buffer_size: int = Field(default=5, env="REAL_TIME_BUFFER_SIZE")
     processing_interval: float = Field(default=1.0, env="PROCESSING_INTERVAL")
     
+    # AWS配置
+    aws_access_key_id: Optional[str] = Field(default=None, env="AWS_ACCESS_KEY_ID")
+    aws_secret_access_key: Optional[str] = Field(default=None, env="AWS_SECRET_ACCESS_KEY")
+    aws_region: str = Field(default="us-east-1", env="AWS_REGION")
+    aws_s3_bucket: str = Field(default="subtitle-genius-temp", env="AWS_S3_BUCKET")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
