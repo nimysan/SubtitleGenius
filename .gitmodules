@@ -1,0 +1,3 @@
+[submodule "amazon-transcribe-streaming-sdk"]
+	path = amazon-transcribe-streaming-sdk
+	url = https://github.com/awslabs/amazon-transcribe-streaming-sdk.git
