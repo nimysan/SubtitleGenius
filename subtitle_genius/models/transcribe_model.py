@@ -13,6 +13,16 @@ from .base import BaseModel
 from ..subtitle.models import Subtitle
 from ..core.config import config
 
+# 导入 SageMaker Whisper 流式处理
+try:
+    from .whisper_sagemaker_streaming import WhisperSageMakerStreamingModel, WhisperSageMakerStreamConfig
+    SAGEMAKER_WHISPER_AVAILABLE = True
+    print("✅ SageMaker Whisper 流式处理模块已加载")
+except ImportError as e:
+    SAGEMAKER_WHISPER_AVAILABLE = False
+    print(f"⚠️  SageMaker Whisper 流式处理模块不可用: {e}")
+    print("   请确保 whisper_converse.py 文件存在且可访问")
+
 # 导入 amazon-transcribe-streaming-sdk
 try:
     from amazon_transcribe.client import TranscribeStreamingClient
@@ -27,20 +37,37 @@ except ImportError as e:
 
 
 class TranscribeModel(BaseModel):
-    """Amazon Transcribe 流式模型 - 专注于实时语音识别"""
+    """统一的流式转录模型 - 支持 Amazon Transcribe 和 SageMaker Whisper"""
     
-    def __init__(self, region_name: str = "us-east-1"):
-        """初始化 Transcribe 流式客户端
+    def __init__(self, 
+                 region_name: str = "us-east-1",
+                 backend: str = "transcribe",  # "transcribe" 或 "sagemaker_whisper"
+                 sagemaker_endpoint: Optional[str] = None,
+                 whisper_config: Optional['WhisperSageMakerStreamConfig'] = None):
+        """初始化转录模型
         
         Args:
             region_name: AWS 区域名称 (默认: us-east-1)
+            backend: 后端选择 ("transcribe" 或 "sagemaker_whisper")
+            sagemaker_endpoint: SageMaker Whisper 端点名称
+            whisper_config: SageMaker Whisper 流式配置
         """
         self.region_name = region_name
+        self.backend = backend
         self.streaming_client = None
-        self._initialize_client()
+        self.sagemaker_whisper_model = None
+        
+        if backend == "transcribe":
+            self._initialize_transcribe_client()
+        elif backend == "sagemaker_whisper":
+            if not sagemaker_endpoint:
+                raise ValueError("使用 sagemaker_whisper 后端时必须提供 sagemaker_endpoint 参数")
+            self._initialize_sagemaker_whisper_model(sagemaker_endpoint, whisper_config)
+        else:
+            raise ValueError(f"不支持的后端: {backend}. 请选择 'transcribe' 或 'sagemaker_whisper'")
     
-    def _initialize_client(self):
-        """初始化 AWS 流式客户端"""
+    def _initialize_transcribe_client(self):
+        """初始化 AWS Transcribe 流式客户端"""
         if not STREAMING_AVAILABLE:
             print("❌ Amazon Transcribe Streaming SDK 不可用")
             return
@@ -54,9 +81,31 @@ class TranscribeModel(BaseModel):
             print(f"❌ 初始化 Transcribe 流式客户端失败: {e}")
             self.streaming_client = None
     
+    def _initialize_sagemaker_whisper_model(self, endpoint_name: str, config: Optional['WhisperSageMakerStreamConfig']):
+        """初始化 SageMaker Whisper 流式模型"""
+        if not SAGEMAKER_WHISPER_AVAILABLE:
+            print("❌ SageMaker Whisper 流式处理不可用")
+            return
+            
+        try:
+            self.sagemaker_whisper_model = WhisperSageMakerStreamingModel(
+                endpoint_name=endpoint_name,
+                region_name=self.region_name,
+                config=config or WhisperSageMakerStreamConfig()
+            )
+            print(f"✅ SageMaker Whisper 流式模型已初始化 (端点: {endpoint_name})")
+            
+        except Exception as e:
+            print(f"❌ 初始化 SageMaker Whisper 流式模型失败: {e}")
+            self.sagemaker_whisper_model = None
+    
     def is_available(self) -> bool:
         """检查模型是否可用"""
-        return STREAMING_AVAILABLE and self.streaming_client is not None
+        if self.backend == "transcribe":
+            return STREAMING_AVAILABLE and self.streaming_client is not None
+        elif self.backend == "sagemaker_whisper":
+            return SAGEMAKER_WHISPER_AVAILABLE and self.sagemaker_whisper_model is not None
+        return False
     
     async def transcribe(self, audio_data: Any, language: str = "ar") -> List[Subtitle]:
         """批处理模式已移除 - 请使用 transcribe_stream 进行流式处理
@@ -74,6 +123,41 @@ class TranscribeModel(BaseModel):
         )
     
     async def transcribe_stream(
+        self, 
+        audio_stream: AsyncGenerator[np.ndarray, None], 
+        language: str = "ar"
+    ) -> AsyncGenerator[Subtitle, None]:
+        """统一的流式转录接口
+        
+        Args:
+            audio_stream: 音频数据流 (numpy数组)
+            language: 语言代码 (默认: ar - Arabic)
+            
+        Yields:
+            实时字幕
+        """
+        if not self.is_available():
+            raise RuntimeError(f"{self.backend} 后端不可用，请检查配置")
+        
+        print(f"🎤 使用 {self.backend.upper()} 后端进行流式转录 (语言: {language})")
+        
+        if self.backend == "transcribe":
+            async for subtitle in self._transcribe_stream_aws(audio_stream, language):
+                yield subtitle
+        elif self.backend == "sagemaker_whisper":
+            async for subtitle in self._transcribe_stream_sagemaker_whisper(audio_stream, language):
+                yield subtitle
+    
+    async def _transcribe_stream_sagemaker_whisper(
+        self, 
+        audio_stream: AsyncGenerator[np.ndarray, None], 
+        language: str = "ar"
+    ) -> AsyncGenerator[Subtitle, None]:
+        """使用 SageMaker Whisper 进行流式转录"""
+        async for subtitle in self.sagemaker_whisper_model.transcribe_stream(audio_stream, language):
+            yield subtitle
+    
+    async def _transcribe_stream_aws(
         self, 
         audio_stream: AsyncGenerator[np.ndarray, None], 
         language: str = "ar"

@@ -23,6 +23,7 @@
 - 🎵 实时音频流提取和处理
 - 🤖 集成多种GenAI模型 (OpenAI Whisper, GPT-4, Claude, Amazon Transcribe等)
 - 🌊 **Amazon Transcribe 流式处理** - 支持实时语音识别
+- 🎙️ **Whisper 流式处理** - 基于缓冲区的伪流式处理，高精度识别
 - 🇸🇦 **默认支持 Arabic 语言** - 专为阿拉伯语优化
 - 📝 智能字幕生成和优化
 - 🎬 支持多种字幕格式 (SRT, WebVTT)
@@ -50,13 +51,14 @@ cd SubtitleGenius
 uv sync
 ```
 
-4. 安装流式处理依赖
+5. 安装 Whisper 流式处理依赖 (可选)
 ```bash
-# 自动安装流式处理相关依赖
-python install_streaming.py
+# 自动安装 Whisper 相关依赖
+python install_whisper.py
 
 # 或手动安装
-pip install amazon-transcribe boto3 pydantic-settings
+pip install openai-whisper
+pip install pyaudio  # 用于麦克风输入
 ```
 
 5. 配置环境变量
