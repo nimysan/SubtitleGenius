@@ -69,3 +69,10 @@ temp/
 # video
 *.mp4
 *.webm
+*.mp4
+*.mp4
+*.wav
+*.aac
+
+data/*
+data/cv-corpus-22.0-delta-2025-06-20-ar.tar.gz

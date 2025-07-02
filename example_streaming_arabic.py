@@ -22,7 +22,7 @@ BYTES_PER_SAMPLE = 2
 CHANNEL_NUMS = 1
 
 # An example file can be found at tests/integration/assets/test.wav
-AUDIO_PATH = "output_16k_mono.wav"
+AUDIO_PATH = "test.wav"
 CHUNK_SIZE = 1024 * 8
 REGION = "us-east-1"
 

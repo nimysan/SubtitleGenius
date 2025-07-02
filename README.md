@@ -2,6 +2,18 @@
 
 基于GenAI的实时MP4音频流字幕生成工具
 
+## Open Universal Arabic ASR Leaderboard
+
+[Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)
+
+[arabicspeech](https://arabicspeech.org/)
+
+[ASR的一些常见评估指标](https://huggingface.co/learn/audio-course/chapter5/evaluation)
+
+[HuggingFace ASR课程](https://huggingface.co/learn/audio-course/chapter5/fine-tuning)
+
+[CommonVoice数据集](https://commonvoice.mozilla.org/en/datasets)
+
 ## 功能特性
 
 - 🎵 实时音频流提取和处理
