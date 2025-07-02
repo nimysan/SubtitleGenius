@@ -14,6 +14,10 @@
 
 [CommonVoice数据集](https://commonvoice.mozilla.org/en/datasets)
 
+## 技术关联
+
+[一个内部用whisper模型的例子](https://github.com/aws-samples/sample-bedrock-whisper-pii-audio-summarizer/)
+
 ## 功能特性
 
 - 🎵 实时音频流提取和处理
