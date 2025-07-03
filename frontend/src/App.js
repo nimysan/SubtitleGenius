@@ -3,7 +3,7 @@ import './App.css';
 import VideoPlayer from './components/VideoPlayer';
 import SubtitleDisplay from './components/SubtitleDisplay';
 import ControlPanel from './components/ControlPanel';
-import { convertToWAV, createWebSocketConnection, sendAudioData } from './utils/AudioUtils';
+import { convertToWAV, createWebSocketConnection, sendAudioData, createSaveSubtitlesConnection } from './utils/AudioUtils';
 
 function App() {
   const [videoFile, setVideoFile] = useState(null);
@@ -15,6 +15,8 @@ function App() {
   const [selectedModel, setSelectedModel] = useState('transcribe');
   const [isRealtime, setIsRealtime] = useState(true);
   const [debugMode, setDebugMode] = useState(false); // 调试模式状态
+  const [clientId, setClientId] = useState(null); // 客户端ID
+  const [saveStatus, setSaveStatus] = useState({ saving: false, message: '', success: false });
   
   const videoRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -119,6 +121,10 @@ function App() {
                 return [...prev, data.subtitle];
               }
             });
+          } else if (data.type === 'connection' && data.status === 'connected') {
+            // 保存客户端ID
+            setClientId(data.client_id);
+            console.log('已连接到服务器，客户端ID:', data.client_id);
           }
         } catch (error) {
           console.error('解析WebSocket消息失败:', error);
@@ -193,6 +199,51 @@ function App() {
       setDebugMode(debug);
     }
   };
+  
+  // 保存字幕
+  const handleSaveSubtitles = (filename) => {
+    if (!clientId || subtitles.length === 0) {
+      alert('没有可用的字幕或客户端ID无效');
+      return;
+    }
+    
+    setSaveStatus({ saving: true, message: '正在保存字幕...', success: false });
+    
+    // 创建保存字幕的WebSocket连接
+    const saveSocket = createSaveSubtitlesConnection(
+      clientId,
+      filename,
+      (data) => {
+        // 成功回调
+        setSaveStatus({ 
+          saving: false, 
+          message: `字幕已保存为: ${data.files.join(', ')}`, 
+          success: true 
+        });
+        setTimeout(() => {
+          setSaveStatus({ saving: false, message: '', success: false });
+        }, 5000);
+      },
+      (error) => {
+        // 错误回调
+        setSaveStatus({ 
+          saving: false, 
+          message: `保存字幕失败: ${error.message}`, 
+          success: false 
+        });
+        setTimeout(() => {
+          setSaveStatus({ saving: false, message: '', success: false });
+        }, 5000);
+      }
+    );
+    
+    // 5秒后关闭连接
+    setTimeout(() => {
+      if (saveSocket && saveSocket.readyState === WebSocket.OPEN) {
+        saveSocket.close();
+      }
+    }, 5000);
+  };
 
   // 组件卸载时清理资源
   useEffect(() => {
@@ -256,6 +307,9 @@ function App() {
           <SubtitleDisplay
             subtitles={subtitles}
             currentTime={currentTime}
+            onSaveSubtitles={handleSaveSubtitles}
+            saveStatus={saveStatus}
+            hasClientId={!!clientId}
           />
         </div>
 

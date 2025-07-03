@@ -214,3 +214,44 @@ export const sendAudioData = (socket, audioData, saveToFile = false) => {
   }
   return false;
 };
+
+/**
+ * 创建保存字幕的WebSocket连接
+ * @param {string} clientId - 客户端ID
+ * @param {string} filename - 文件名
+ * @param {Function} onSuccess - 成功回调
+ * @param {Function} onError - 错误回调
+ * @returns {WebSocket} - WebSocket实例
+ */
+export const createSaveSubtitlesConnection = (clientId, filename, onSuccess, onError) => {
+  const url = `ws://localhost:8000/ws/save_subtitles?client_id=${clientId}${filename ? `&filename=${filename}` : ''}`;
+  
+  const socket = new WebSocket(url);
+  
+  socket.onopen = () => console.log('保存字幕WebSocket连接已建立');
+  
+  socket.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      if (data.type === 'success') {
+        console.log('字幕保存成功:', data.message);
+        if (onSuccess) onSuccess(data);
+      } else if (data.type === 'error') {
+        console.error('字幕保存失败:', data.message);
+        if (onError) onError(data);
+      }
+    } catch (error) {
+      console.error('解析WebSocket消息失败:', error);
+      if (onError) onError({ message: '解析WebSocket消息失败' });
+    }
+  };
+  
+  socket.onclose = () => console.log('保存字幕WebSocket连接已关闭');
+  
+  socket.onerror = (error) => {
+    console.error('保存字幕WebSocket错误:', error);
+    if (onError) onError({ message: '保存字幕WebSocket错误' });
+  };
+  
+  return socket;
+};

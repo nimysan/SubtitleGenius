@@ -1,7 +1,9 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import './SubtitleDisplay.css';
 
-const SubtitleDisplay = ({ subtitles, currentTime }) => {
+const SubtitleDisplay = ({ subtitles, currentTime, onSaveSubtitles, saveStatus, hasClientId }) => {
+  const [filename, setFilename] = useState('');
+  const [showFilenameInput, setShowFilenameInput] = useState(false);
   const subtitleRef = useRef(null);
 
   // 获取当前时间应该显示的字幕
@@ -40,10 +42,70 @@ const SubtitleDisplay = ({ subtitles, currentTime }) => {
   return (
     <div className="subtitle-display-container">
       <div className="subtitle-header">
-        <h3>字幕历史</h3>
-        <div className="subtitle-info">
-          <span className="current-time">当前时间: {formatTime(currentTime)}</span>
-          <span className="subtitle-count">字幕数量: {subtitles.length}</span>
+        <div className="subtitle-header-left">
+          <h3>字幕历史</h3>
+          <div className="subtitle-info">
+            <span className="current-time">当前时间: {formatTime(currentTime)}</span>
+            <span className="subtitle-count">字幕数量: {subtitles.length}</span>
+          </div>
+        </div>
+        
+        <div className="subtitle-actions">
+          {subtitles.length > 0 && (
+            <>
+              {showFilenameInput ? (
+                <div className="filename-input-container">
+                  <input
+                    type="text"
+                    value={filename}
+                    onChange={(e) => setFilename(e.target.value)}
+                    placeholder="输入文件名"
+                    className="filename-input"
+                  />
+                  <button 
+                    className="confirm-save-button"
+                    onClick={() => {
+                      onSaveSubtitles(filename);
+                      setShowFilenameInput(false);
+                    }}
+                    disabled={!hasClientId || saveStatus.saving}
+                  >
+                    确认
+                  </button>
+                  <button 
+                    className="cancel-button"
+                    onClick={() => setShowFilenameInput(false)}
+                  >
+                    取消
+                  </button>
+                </div>
+              ) : (
+                <button 
+                  className={`save-subtitles-button ${saveStatus.saving ? 'saving' : ''}`}
+                  onClick={() => setShowFilenameInput(true)}
+                  disabled={!hasClientId || saveStatus.saving}
+                >
+                  {saveStatus.saving ? (
+                    <>
+                      <span className="loading-spinner"></span>
+                      保存中...
+                    </>
+                  ) : (
+                    <>
+                      <span className="save-icon">💾</span>
+                      保存字幕
+                    </>
+                  )}
+                </button>
+              )}
+              
+              {saveStatus.message && (
+                <div className={`save-status-message ${saveStatus.success ? 'success' : 'error'}`}>
+                  {saveStatus.message}
+                </div>
+              )}
+            </>
+          )}
         </div>
       </div>
 
