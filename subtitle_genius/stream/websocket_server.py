@@ -142,7 +142,9 @@ async def websocket_whisper_endpoint(
             try:
                 # 将WAV数据转换为numpy数组
                 audio_data = await process_wav_data(data)
-                
+                if audio_data is None:
+                    logger.error(f"process_wav_data 处理音频数据失败: audio_data is None")
+                    
                 if audio_data is not None:
                     # 添加到音频块列表
                     audio_chunks.append(audio_data)
@@ -158,154 +160,6 @@ async def websocket_whisper_endpoint(
                         ):
                             # 发送字幕回客户端
                             await send_subtitle(websocket, subtitle, client_id, language)
-            
-            except Exception as e:
-                logger.error(f"处理音频数据失败: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"处理音频数据失败: {str(e)}"
-                })
-    
-    except WebSocketDisconnect:
-        logger.info(f"客户端 {client_id} 断开连接")
-    except Exception as e:
-        logger.error(f"WebSocket错误: {e}")
-    finally:
-        # 清理连接
-        if client_id in active_connections:
-            del active_connections[client_id]
-
-
-@app.websocket("/ws/transcribe")
-async def websocket_transcribe_endpoint(
-    websocket: WebSocket, 
-    language: str = Query("ar")
-):
-    """Amazon Transcribe模型WebSocket端点"""
-    client_id = str(uuid.uuid4())
-    
-    await websocket.accept()
-    active_connections[client_id] = websocket
-    
-    logger.info(f"客户端 {client_id} 已连接到Transcribe端点，语言: {language}")
-    
-    try:
-        # 发送连接确认
-        await websocket.send_json({
-            "type": "connection",
-            "status": "connected",
-            "client_id": client_id,
-            "model": "transcribe",
-            "language": language
-        })
-        
-        # 创建临时文件存储音频块
-        audio_chunks: List[np.ndarray] = []
-        
-        # 处理接收到的音频数据
-        async for data in websocket.iter_bytes():
-            try:
-                # 将WAV数据转换为numpy数组
-                audio_data = await process_wav_data(data)
-                
-                if audio_data is not None:
-                    # 添加到音频块列表
-                    audio_chunks.append(audio_data)
-                    
-                    # 使用Transcribe模型处理音频
-                    if transcribe_model:
-                        # 保存临时WAV文件
-                        temp_file = temp_dir / f"{client_id}_{len(audio_chunks)}.wav"
-                        await audio_processor.save_audio(audio_data, temp_file)
-                        
-                        # 处理音频文件
-                        subtitle = await transcribe_model.transcribe_chunk(
-                            str(temp_file), language=language
-                        )
-                        
-                        # 发送字幕回客户端
-                        if subtitle:
-                            await send_subtitle(websocket, subtitle, client_id, language)
-                        
-                        # 删除临时文件
-                        try:
-                            os.remove(temp_file)
-                        except:
-                            pass
-            
-            except Exception as e:
-                logger.error(f"处理音频数据失败: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"处理音频数据失败: {str(e)}"
-                })
-    
-    except WebSocketDisconnect:
-        logger.info(f"客户端 {client_id} 断开连接")
-    except Exception as e:
-        logger.error(f"WebSocket错误: {e}")
-    finally:
-        # 清理连接
-        if client_id in active_connections:
-            del active_connections[client_id]
-
-
-@app.websocket("/ws/claude")
-async def websocket_claude_endpoint(
-    websocket: WebSocket, 
-    language: str = Query("ar")
-):
-    """Claude模型WebSocket端点"""
-    client_id = str(uuid.uuid4())
-    
-    await websocket.accept()
-    active_connections[client_id] = websocket
-    
-    logger.info(f"客户端 {client_id} 已连接到Claude端点，语言: {language}")
-    
-    try:
-        # 发送连接确认
-        await websocket.send_json({
-            "type": "connection",
-            "status": "connected",
-            "client_id": client_id,
-            "model": "claude",
-            "language": language
-        })
-        
-        # 创建临时文件存储音频块
-        audio_chunks: List[np.ndarray] = []
-        
-        # 处理接收到的音频数据
-        async for data in websocket.iter_bytes():
-            try:
-                # 将WAV数据转换为numpy数组
-                audio_data = await process_wav_data(data)
-                
-                if audio_data is not None:
-                    # 添加到音频块列表
-                    audio_chunks.append(audio_data)
-                    
-                    # 使用Claude模型处理音频
-                    if claude_model:
-                        # 保存临时WAV文件
-                        temp_file = temp_dir / f"{client_id}_{len(audio_chunks)}.wav"
-                        await audio_processor.save_audio(audio_data, temp_file)
-                        
-                        # 处理音频文件
-                        subtitle = await claude_model.transcribe_audio(
-                            str(temp_file), language=language
-                        )
-                        
-                        # 发送字幕回客户端
-                        if subtitle:
-                            await send_subtitle(websocket, subtitle, client_id, language)
-                        
-                        # 删除临时文件
-                        try:
-                            os.remove(temp_file)
-                        except:
-                            pass
             
             except Exception as e:
                 logger.error(f"处理音频数据失败: {e}")
@@ -353,7 +207,7 @@ async def send_subtitle(websocket: WebSocket, subtitle: Subtitle, client_id: str
     try:
         # 创建唯一ID
         subtitle_id = f"{client_id}_{uuid.uuid4()}"
-        
+        logger.info(f"current subtitle is {subtitle} and {json.dumps(subtitle,indent=2)}")
         # 翻译字幕文本
         if subtitle.text.strip():
             try:

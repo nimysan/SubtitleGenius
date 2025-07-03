@@ -236,6 +236,12 @@ def transcribe_chunk(sagemaker_client, chunk_data, endpoint_name, language="en",
         response_body = json.loads(response['Body'].read().decode('utf-8'))
         print(f"Response received from SageMaker endpoint")
         
+        # 打印payload但排除audio_input字段
+        payload_log = {k: v for k, v in payload.items() if k != 'audio_input'}
+        print(f"Payload (excluding audio_input): {payload_log}")
+        
+        print(f"Response body: {response_body}")
+        
         return response_body
         
     except Exception as e:
