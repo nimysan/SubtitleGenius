@@ -1,7 +1,7 @@
 """字幕数据模型"""
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Dict, Any
 
 
 @dataclass
@@ -10,6 +10,7 @@ class Subtitle:
     start: float  # 开始时间(秒)
     end: float    # 结束时间(秒)
     text: str     # 字幕文本
+    translated_text: Optional[str] = None  # 翻译后的文本
     
     def __post_init__(self):
         """验证数据"""
@@ -50,3 +51,12 @@ class Subtitle:
         start_time = self.format_time(self.start, "vtt")
         end_time = self.format_time(self.end, "vtt")
         return f"{start_time} --> {end_time}\n{self.text}\n"
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """转换为字典"""
+        return {
+            "start": self.start,
+            "end": self.end,
+            "text": self.text,
+            "translated_text": self.translated_text
+        }

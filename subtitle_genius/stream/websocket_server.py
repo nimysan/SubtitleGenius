@@ -21,6 +21,7 @@ from ..models.transcribe_model import TranscribeModel
 from ..models.whisper_sagemaker_streaming import WhisperSageMakerStreamConfig
 from ..models.claude_model import ClaudeModel
 from ..subtitle.models import Subtitle
+from translation_service import translation_manager
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -102,6 +103,12 @@ async def startup_event():
         logger.info("Claude模型已初始化")
     except Exception as e:
         logger.error(f"Claude模型初始化失败: {e}")
+    
+    # 确保翻译服务可用
+    if "bedrock" in translation_manager.get_available_services():
+        logger.info("Bedrock翻译服务已初始化")
+    else:
+        logger.warning("Bedrock翻译服务不可用，将使用备用翻译服务")
 
 
 @app.websocket("/ws/whisper")
@@ -150,7 +157,7 @@ async def websocket_whisper_endpoint(
                             audio_generator(), language=language
                         ):
                             # 发送字幕回客户端
-                            await send_subtitle(websocket, subtitle, client_id)
+                            await send_subtitle(websocket, subtitle, client_id, language)
             
             except Exception as e:
                 logger.error(f"处理音频数据失败: {e}")
@@ -218,7 +225,7 @@ async def websocket_transcribe_endpoint(
                         
                         # 发送字幕回客户端
                         if subtitle:
-                            await send_subtitle(websocket, subtitle, client_id)
+                            await send_subtitle(websocket, subtitle, client_id, language)
                         
                         # 删除临时文件
                         try:
@@ -292,7 +299,7 @@ async def websocket_claude_endpoint(
                         
                         # 发送字幕回客户端
                         if subtitle:
-                            await send_subtitle(websocket, subtitle, client_id)
+                            await send_subtitle(websocket, subtitle, client_id, language)
                         
                         # 删除临时文件
                         try:
@@ -341,11 +348,28 @@ async def process_wav_data(data: bytes) -> Optional[np.ndarray]:
         return None
 
 
-async def send_subtitle(websocket: WebSocket, subtitle: Subtitle, client_id: str):
+async def send_subtitle(websocket: WebSocket, subtitle: Subtitle, client_id: str, language: str = "ar"):
     """发送字幕到客户端"""
     try:
         # 创建唯一ID
         subtitle_id = f"{client_id}_{uuid.uuid4()}"
+        
+        # 翻译字幕文本
+        if subtitle.text.strip():
+            try:
+                # 使用翻译服务翻译文本
+                translation_result = await translation_manager.translate(
+                    text=subtitle.text,
+                    target_lang="zh",
+                    service="bedrock"  # 优先使用Bedrock翻译服务
+                )
+                
+                # 设置翻译结果
+                subtitle.translated_text = translation_result.translated_text
+                logger.info(f"字幕已翻译: {subtitle.text} -> {subtitle.translated_text}")
+            except Exception as e:
+                logger.error(f"翻译失败: {e}")
+                subtitle.translated_text = f"[翻译失败] {subtitle.text}"
         
         # 发送字幕
         await websocket.send_json({
@@ -354,7 +378,8 @@ async def send_subtitle(websocket: WebSocket, subtitle: Subtitle, client_id: str
                 "id": subtitle_id,
                 "start": subtitle.start,
                 "end": subtitle.end,
-                "text": subtitle.text
+                "text": subtitle.text,
+                "translated_text": subtitle.translated_text
             }
         })
     except Exception as e:

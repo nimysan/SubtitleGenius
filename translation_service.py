@@ -8,6 +8,7 @@ import os
 import asyncio
 import aiohttp
 import json
+import boto3
 from typing import Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -149,6 +150,88 @@ class GoogleTranslator(TranslationService):
         
         except Exception as e:
             raise Exception(f"Google translation failed: {str(e)}")
+
+class BedrockTranslator(TranslationService):
+    """Amazon Bedrock Claude翻译服务"""
+    
+    def __init__(self, model_id: str = "us.anthropic.claude-3-haiku-20240307-v1:0"):
+        super().__init__()
+        self.name = "bedrock_claude"
+        self.model_id = model_id
+        
+        # 初始化Bedrock客户端
+        self.bedrock_runtime = boto3.client(
+            service_name="bedrock-runtime",
+            region_name=os.getenv("AWS_REGION", "us-east-1")
+        )
+    
+    async def translate(self, text: str, target_lang: str = "zh", source_lang: str = "auto") -> TranslationResult:
+        """使用Bedrock Claude Haiku翻译文本"""
+        if not text.strip():
+            return TranslationResult(
+                original_text=text,
+                translated_text=text,
+                source_language=source_lang,
+                target_language=target_lang,
+                service=self.name,
+                confidence=1.0
+            )
+        
+        # 语言映射
+        lang_map = {
+            "zh": "中文",
+            "en": "English",
+            "ar": "Arabic",
+            "ja": "Japanese",
+            "ko": "Korean",
+            "fr": "French",
+            "de": "German",
+            "es": "Spanish",
+            "ru": "Russian"
+        }
+        
+        target_language = lang_map.get(target_lang, "中文")
+        source_language = lang_map.get(source_lang, source_lang)
+        
+        try:
+            # 构建消息序列
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "text": f"请将以下{source_language}文本翻译为{target_language}，只返回翻译结果，不要添加任何解释或额外内容：\n\n{text}"
+                        }
+                    ]
+                }
+            ]
+            
+            # 调用Bedrock API使用converse方法
+            response = self.bedrock_runtime.converse(
+                modelId=self.model_id,
+                messages=messages,
+                inferenceConfig={
+                    "temperature": 0.1,
+                    "maxTokens": 1000,
+                }
+            )
+            
+            # 解析响应
+            translated_text = response.get('output')["message"]["content"][0]["text"].strip()
+            
+            return TranslationResult(
+                original_text=text,
+                translated_text=translated_text,
+                source_language=source_lang,
+                target_language=target_lang,
+                service=self.name,
+                confidence=0.95
+            )
+            
+        except Exception as e:
+            print(f"Bedrock翻译失败: {e}")
+            raise
+
 
 class BaiduTranslator(TranslationService):
     """百度翻译服务"""
@@ -300,6 +383,15 @@ class TranslationManager:
                 print("✅ 百度翻译服务已启用")
             except Exception as e:
                 print(f"⚠️ 百度翻译服务初始化失败: {e}")
+        
+        # Bedrock翻译器
+        try:
+            model_id = os.getenv("BEDROCK_MODEL_ID", "us.anthropic.claude-3-haiku-20240307-v1:0")
+            self.translators["bedrock"] = BedrockTranslator(model_id=model_id)
+            self.default_translator = "bedrock"  # 设为默认翻译器
+            print(f"✅ Bedrock Claude翻译服务已启用 (模型: {model_id})")
+        except Exception as e:
+            print(f"⚠️ Bedrock Claude翻译服务初始化失败: {e}")
     
     async def translate(self, text: str, target_lang: str = "zh", 
                        service: Optional[str] = None) -> TranslationResult:

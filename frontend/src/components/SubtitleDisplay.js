@@ -51,7 +51,12 @@ const SubtitleDisplay = ({ subtitles, currentTime }) => {
             <span className="subtitle-time">
               [{formatTime(currentSubtitle.start)} - {formatTime(currentSubtitle.end)}]
             </span>
-            <span className="subtitle-text">{currentSubtitle.text}</span>
+            <div className="subtitle-text-container">
+              <div className="original-text">{currentSubtitle.text}</div>
+              {currentSubtitle.translated_text && (
+                <div className="translated-text">{currentSubtitle.translated_text}</div>
+              )}
+            </div>
           </div>
         ) : (
           <div className="no-subtitle">
@@ -77,7 +82,10 @@ const SubtitleDisplay = ({ subtitles, currentTime }) => {
                 </span>
               </div>
               <div className="subtitle-content">
-                {subtitle.text}
+                <div className="original-text">{subtitle.text}</div>
+                {subtitle.translated_text && (
+                  <div className="translated-text">{subtitle.translated_text}</div>
+                )}
               </div>
             </div>
           ))
