@@ -2,6 +2,12 @@
 
 基于GenAI的实时MP4音频流字幕生成工具
 
+## 演示界面
+
+![SubtitleGenius Demo](docs/demo.png)
+
+*SubtitleGenius Web界面 - 支持实时语音识别和字幕生成*
+
 ## Open Universal Arabic ASR Leaderboard
 
 [Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)
