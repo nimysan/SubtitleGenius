@@ -185,8 +185,10 @@ class WhisperSageMakerStreamingModel:
             logger.error(f"Error in SageMaker Whisper streaming: {e}")
             raise
         finally:
-            # 处理剩余缓冲区内容
-            await self._process_remaining_buffer(buffer, language)
+            # 处理剩余缓冲区内容并获取最终字幕
+            final_subtitle = await self._process_remaining_buffer(buffer, language)
+            if final_subtitle:
+                yield final_subtitle  # 如果有最终字幕，发送出去
             
     async def _async_transcribe(self, wav_data: bytes, language: str) -> Dict[str, Any]:
         """异步转录音频数据"""
@@ -297,8 +299,8 @@ class WhisperSageMakerStreamingModel:
                 
         return 0
         
-    async def _process_remaining_buffer(self, buffer: WhisperSageMakerStreamBuffer, language: str):
-        """处理剩余缓冲区内容"""
+    async def _process_remaining_buffer(self, buffer: WhisperSageMakerStreamBuffer, language: str) -> Optional[Subtitle]:
+        """处理剩余缓冲区内容，返回生成的字幕（如果有）"""
         if len(buffer.buffer) > 0:
             remaining_audio = np.array(list(buffer.buffer), dtype=np.float32)
             
@@ -312,10 +314,12 @@ class WhisperSageMakerStreamingModel:
                     if new_text.strip():
                         subtitle = Subtitle(
                             start=buffer.get_current_time(),
-                            end=buffer.get_current_time() + len(remaining_audio) / buffer.config.sample_rate,
+                            end=buffer.get_current_time() + 3, # TODO here need to 
                             text=new_text.strip()
                         )
-                        logger.debug(f"Final subtitle: {subtitle}")
+                        logger.info(f"Final subtitle: {subtitle}")
+                        return subtitle  # 返回生成的字幕
+        return None  # 如果没有生成字幕，返回None
                         
     def __del__(self):
         """清理资源"""

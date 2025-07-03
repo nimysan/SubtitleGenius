@@ -10,6 +10,8 @@ import argparse
 from pathlib import Path
 import sys
 
+
+
 # 添加项目根目录到Python路径
 sys.path.insert(0, str(Path(__file__).parent.absolute()))
 
@@ -31,8 +33,16 @@ def main():
     parser.add_argument('--host', type=str, default='0.0.0.0', help='服务器主机地址')
     parser.add_argument('--port', type=int, default=8000, help='服务器端口')
     parser.add_argument('--reload', action='store_true', help='启用自动重载')
+    parser.add_argument('--debug', help='启动调试')
+    
     
     args = parser.parse_args()
+    
+    if args.debug:
+        import debugpy
+        debugpy.listen(("localhost", 5678))
+        print("Waiting for debugger attach...")
+        debugpy.wait_for_client()
     
     # 确保日志目录存在
     Path('logs').mkdir(exist_ok=True)

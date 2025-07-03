@@ -46,9 +46,8 @@ active_connections: Dict[str, WebSocket] = {}
 audio_processor = AudioProcessor()
 
 # 模型实例
-transcribe_model = None
 sagemaker_whisper_model = None
-claude_model = None
+
 
 # SageMaker Whisper 配置
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT", "endpoint-quick-start-z9afg")
@@ -63,8 +62,7 @@ os.makedirs(temp_dir, exist_ok=True)
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化模型"""
-    global sagemaker_whisper_model, transcribe_model, claude_model
-    
+    global sagemaker_whisper_model
     # 初始化SageMaker Whisper模型
     try:
         # 配置参数
@@ -82,27 +80,13 @@ async def startup_event():
             region_name=AWS_REGION,
             whisper_config=config
         )
-        
+        logger.info(f"SageMaker Whisper模型已初始化 config is {config}")
         if sagemaker_whisper_model.is_available():
             logger.info("SageMaker Whisper模型已初始化")
         else:
             logger.error(f"SageMaker Whisper模型不可用，请检查端点配置: {SAGEMAKER_ENDPOINT}")
     except Exception as e:
         logger.error(f"SageMaker Whisper模型初始化失败: {e}")
-    
-    # 初始化Transcribe模型
-    try:
-        transcribe_model = TranscribeModel()
-        logger.info("Transcribe模型已初始化")
-    except Exception as e:
-        logger.error(f"Transcribe模型初始化失败: {e}")
-    
-    # 初始化Claude模型
-    try:
-        claude_model = ClaudeModel()
-        logger.info("Claude模型已初始化")
-    except Exception as e:
-        logger.error(f"Claude模型初始化失败: {e}")
     
     # 确保翻译服务可用
     if "bedrock" in translation_manager.get_available_services():
@@ -142,9 +126,7 @@ async def websocket_whisper_endpoint(
             try:
                 # 将WAV数据转换为numpy数组
                 audio_data = await process_wav_data(data)
-                if audio_data is None:
-                    logger.error(f"process_wav_data 处理音频数据失败: audio_data is None")
-                    
+                  
                 if audio_data is not None:
                     # 添加到音频块列表
                     audio_chunks.append(audio_data)
@@ -159,6 +141,7 @@ async def websocket_whisper_endpoint(
                             audio_generator(), language=language
                         ):
                             # 发送字幕回客户端
+                            logging.info(f"Received subtitle: {subtitle}")
                             await send_subtitle(websocket, subtitle, client_id, language)
             
             except Exception as e:
@@ -207,7 +190,7 @@ async def send_subtitle(websocket: WebSocket, subtitle: Subtitle, client_id: str
     try:
         # 创建唯一ID
         subtitle_id = f"{client_id}_{uuid.uuid4()}"
-        logger.info(f"current subtitle is {subtitle} and {json.dumps(subtitle,indent=2)}")
+        logger.info(f"current subtitle is {subtitle} and {json.dumps(subtitle.to_dict(),indent=2)}")
         # 翻译字幕文本
         if subtitle.text.strip():
             try:
