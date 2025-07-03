@@ -69,8 +69,8 @@ async def startup_event():
     try:
         # 配置参数
         config = WhisperSageMakerStreamConfig(
-            chunk_duration=3.0,      # 每3秒处理一次
-            overlap_duration=0.5,    # 0.5秒重叠避免截断
+            chunk_duration=10,      # 每3秒处理一次
+            overlap_duration=2,    # 0.5秒重叠避免截断
             voice_threshold=0.01,    # 语音检测阈值
             sagemaker_chunk_duration=SAGEMAKER_CHUNK_DURATION  # SageMaker 端点处理的块大小
         )

@@ -1,78 +1,103 @@
 /**
  * 音频工具类
- * 提供音频数据处理和转换功能
+ * 使用第三方库提供更可靠的音频数据处理和转换功能
  */
+
+// 导入第三方音频处理库
+import toWav from 'audiobuffer-to-wav';
+import WavEncoder from 'wav-encoder';
 
 /**
  * 将Float32Array音频数据转换为WAV格式的Blob对象
+ * 使用第三方库 wav-encoder 提供更可靠的转换
+ * @param {Float32Array} audioData - 音频数据
+ * @param {number} sampleRate - 采样率
+ * @returns {Promise<Blob>} - WAV格式的Blob对象
+ */
+export const convertToWAV = async (audioData, sampleRate) => {
+  try {
+    // 使用 wav-encoder 进行转换
+    const audioBuffer = {
+      sampleRate: sampleRate,
+      channelData: [audioData] // 单声道
+    };
+    
+    const wavArrayBuffer = await WavEncoder.encode(audioBuffer);
+    return new Blob([wavArrayBuffer], { type: 'audio/wav' });
+  } catch (error) {
+    console.warn('第三方库转换失败，使用降级方案:', error);
+    // 降级到原始实现
+    return convertToWAVFallback(audioData, sampleRate);
+  }
+};
+
+/**
+ * 从AudioBuffer转换为WAV (用于处理AudioBuffer类型输入)
+ * @param {AudioBuffer} audioBuffer - AudioBuffer对象
+ * @returns {Blob} - WAV格式的Blob对象
+ */
+export const convertAudioBufferToWAV = (audioBuffer) => {
+  const wavArrayBuffer = toWav(audioBuffer);
+  return new Blob([wavArrayBuffer], { type: 'audio/wav' });
+};
+
+/**
+ * 智能转换函数 - 自动检测输入类型并转换
+ * @param {Float32Array|AudioBuffer} audioInput - 音频输入
+ * @param {number} sampleRate - 采样率（Float32Array时需要）
+ * @returns {Promise<Blob>} - WAV格式的Blob对象
+ */
+export const smartConvertToWAV = async (audioInput, sampleRate = 16000) => {
+  if (audioInput instanceof AudioBuffer) {
+    return convertAudioBufferToWAV(audioInput);
+  } else if (audioInput instanceof Float32Array) {
+    return await convertToWAV(audioInput, sampleRate);
+  } else {
+    throw new Error('不支持的音频输入类型');
+  }
+};
+
+/**
+ * 降级方案：原始WAV转换实现（作为后备）
  * @param {Float32Array} audioData - 音频数据
  * @param {number} sampleRate - 采样率
  * @returns {Blob} - WAV格式的Blob对象
  */
-export const convertToWAV = (audioData, sampleRate) => {
-  // WAV文件头大小
+const convertToWAVFallback = (audioData, sampleRate) => {
+  console.warn('使用降级WAV转换方案');
+  
   const headerSize = 44;
-  
-  // 音频数据大小（字节）
-  const dataSize = audioData.length * 2; // 16位每样本 = 2字节
-  
-  // 创建缓冲区
+  const dataSize = audioData.length * 2;
   const buffer = new ArrayBuffer(headerSize + dataSize);
   const view = new DataView(buffer);
   
   // 写入WAV文件头
-  // "RIFF"标识
   writeString(view, 0, 'RIFF');
-  // 文件大小
   view.setUint32(4, 36 + dataSize, true);
-  // "WAVE"标识
   writeString(view, 8, 'WAVE');
-  // "fmt "子块
   writeString(view, 12, 'fmt ');
-  // 子块大小
   view.setUint32(16, 16, true);
-  // 音频格式（1表示PCM）
   view.setUint16(20, 1, true);
-  // 声道数
   view.setUint16(22, 1, true);
-  // 采样率
   view.setUint32(24, sampleRate, true);
-  // 字节率
   view.setUint32(28, sampleRate * 2, true);
-  // 块对齐
   view.setUint16(32, 2, true);
-  // 位深度
   view.setUint16(34, 16, true);
-  // "data"子块
   writeString(view, 36, 'data');
-  // 数据大小
   view.setUint32(40, dataSize, true);
   
-  // 写入音频数据
   floatTo16BitPCM(view, headerSize, audioData);
   
-  // 创建Blob对象
   return new Blob([buffer], { type: 'audio/wav' });
 };
 
-/**
- * 将字符串写入DataView
- * @param {DataView} view - DataView对象
- * @param {number} offset - 偏移量
- * @param {string} string - 要写入的字符串
- */
+// 辅助函数（保留用于降级方案）
 const writeString = (view, offset, string) => {
   for (let i = 0; i < string.length; i++) {
     view.setUint8(offset + i, string.charCodeAt(i));
   }
 };
 
-/**
- * 将Float32Array转换为16位PCM
- * @param {DataView} view - DataView对象
- * @param {number} offset - 偏移量
- * @param {Float32Array} input - 输入的Float32Array
- */
 const floatTo16BitPCM = (view, offset, input) => {
   for (let i = 0; i < input.length; i++) {
     const s = Math.max(-1, Math.min(1, input[i]));
@@ -161,11 +186,30 @@ export const createWebSocketConnection = (url, onMessage, onOpen, onClose, onErr
  * 发送音频数据到WebSocket
  * @param {WebSocket} socket - WebSocket实例
  * @param {Blob|ArrayBuffer} audioData - 音频数据
+ * @param {boolean} saveToFile - 是否保存到文件
  * @returns {boolean} - 是否发送成功
  */
-export const sendAudioData = (socket, audioData) => {
+export const sendAudioData = (socket, audioData, saveToFile = false) => {
   if (socket && socket.readyState === WebSocket.OPEN) {
     socket.send(audioData);
+    
+    // 如果需要保存到文件
+    if (saveToFile && audioData instanceof Blob) {
+      const timestamp = new Date().getTime();
+      const url = URL.createObjectURL(audioData);
+      const a = document.createElement('a');
+      a.style.display = 'none';
+      a.href = url;
+      a.download = `audio_chunk_${timestamp}.wav`;
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+      }, 100);
+      console.log(`已保存音频文件: audio_chunk_${timestamp}.wav`);
+    }
+    
     return true;
   }
   return false;

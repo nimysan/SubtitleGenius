@@ -9,19 +9,21 @@ const ControlPanel = ({
   hasVideo,
   selectedLanguage = 'ar',
   selectedModel = 'whisper',
-  isRealtime = true
+  isRealtime = true,
+  debugMode = false
 }) => {
   const fileInputRef = useRef(null);
   const [language, setLanguage] = useState(selectedLanguage);
   const [model, setModel] = useState(selectedModel);
   const [realtime, setRealtime] = useState(isRealtime);
+  const [debug, setDebug] = useState(debugMode);
 
   // 当设置变更时通知父组件
   useEffect(() => {
     if (onSettingsChange) {
-      onSettingsChange(language, model, realtime);
+      onSettingsChange(language, model, realtime, debug);
     }
-  }, [language, model, realtime, onSettingsChange]);
+  }, [language, model, realtime, debug, onSettingsChange]);
 
   const handleFileSelect = (event) => {
     const file = event.target.files[0];
@@ -71,6 +73,10 @@ const ControlPanel = ({
 
   const handleRealtimeChange = (e) => {
     setRealtime(e.target.checked);
+  };
+
+  const handleDebugModeChange = (e) => {
+    setDebug(e.target.checked);
   };
 
   return (
@@ -174,6 +180,18 @@ const ControlPanel = ({
                 disabled={isProcessing}
               />
               实时处理
+            </label>
+          </div>
+          
+          <div className="setting-item">
+            <label>
+              <input 
+                type="checkbox" 
+                checked={debug}
+                onChange={handleDebugModeChange}
+                disabled={isProcessing}
+              />
+              调试模式 (保存WAV文件)
             </label>
           </div>
         </div>

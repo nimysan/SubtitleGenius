@@ -61,7 +61,12 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
           .then(() => {
             processorNodeRef.current = new AudioWorkletNode(
               audioContextRef.current,
-              'audio-processor'
+              'audio-processor',
+              {
+                processorOptions: {
+                  sampleRate: audioContextRef.current.sampleRate
+                }
+              }
             );
             
             // 连接节点
@@ -70,7 +75,21 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
             // 设置消息处理
             processorNodeRef.current.port.onmessage = (event) => {
               if (onAudioData && event.data.audioData) {
-                onAudioData(event.data.audioData);
+                const { audioData, originalSampleRate, targetSampleRate, duration, originalLength, processedLength } = event.data;
+                console.log(`AudioWorklet发送音频数据:`, {
+                  originalSampleRate,
+                  targetSampleRate,
+                  duration,
+                  originalLength,
+                  processedLength
+                });
+                onAudioData(audioData, {
+                  originalSampleRate,
+                  targetSampleRate,
+                  duration,
+                  originalLength,
+                  processedLength
+                });
               }
             };
           })
@@ -117,8 +136,15 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
         
         // 发送音频数据
         if (onAudioData) {
-          console.log(`ScriptProcessor发送音频数据，样本数: ${audioData.length}，时长: ${audioData.length/audioContextRef.current.sampleRate}秒`);
-          onAudioData(audioData);
+          const sampleRate = audioContextRef.current.sampleRate;
+          console.log(`ScriptProcessor发送音频数据，样本数: ${audioData.length}，时长: ${audioData.length/sampleRate}秒`);
+          onAudioData(audioData, {
+            originalSampleRate: sampleRate,
+            targetSampleRate: 16000, // 目标采样率
+            duration: audioData.length / sampleRate,
+            originalLength: audioData.length,
+            processedLength: audioData.length // ScriptProcessor不做重采样
+          });
         }
       };
       

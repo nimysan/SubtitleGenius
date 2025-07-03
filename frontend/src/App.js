@@ -14,6 +14,7 @@ function App() {
   const [selectedLanguage, setSelectedLanguage] = useState('ar');
   const [selectedModel, setSelectedModel] = useState('transcribe');
   const [isRealtime, setIsRealtime] = useState(true);
+  const [debugMode, setDebugMode] = useState(false); // 调试模式状态
   
   const videoRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -37,7 +38,7 @@ function App() {
   };
 
   // 处理音频数据
-  const handleAudioData = useCallback((audioData) => {
+  const handleAudioData = useCallback(async (audioData, audioInfo = {}) => {
     try {
       // 将音频数据添加到缓冲区
       audioChunksRef.current.push(audioData);
@@ -45,14 +46,24 @@ function App() {
       // 如果不是实时处理，则只收集数据
       if (!isRealtime) return;
       
-      // 将音频数据转换为WAV格式
-      const sampleRate = 16000; // 使用固定采样率，与后端匹配
-      const wavBlob = convertToWAV(audioData, sampleRate);
+      // 获取采样率信息，优先使用音频处理器提供的信息
+      const sampleRate = audioInfo.targetSampleRate || audioInfo.originalSampleRate || 16000;
+      
+      console.log('音频转换信息:', {
+        originalSampleRate: audioInfo.originalSampleRate,
+        targetSampleRate: audioInfo.targetSampleRate,
+        usingSampleRate: sampleRate,
+        audioDataLength: audioData.length,
+        duration: audioInfo.duration
+      });
+      
+      // 将音频数据转换为WAV格式（现在是异步的）
+      const wavBlob = await convertToWAV(audioData, sampleRate);
       
       // 通过WebSocket发送音频数据
       if (socket) {
-        console.log('发送音频数据，大小:', audioData.length);
-        sendAudioData(socket, wavBlob);
+        console.log('发送音频数据，大小:', audioData.length, '采样率:', sampleRate);
+        sendAudioData(socket, wavBlob, debugMode); // 第三个参数表示是否保存到文件
       }
     } catch (error) {
       console.error('处理音频数据失败:', error);
@@ -167,10 +178,13 @@ function App() {
   };
 
   // 处理设置变更
-  const handleSettingsChange = (language, model, realtime) => {
+  const handleSettingsChange = (language, model, realtime, debug) => {
     setSelectedLanguage(language);
     setSelectedModel(model);
     setIsRealtime(realtime);
+    if (debug !== undefined) {
+      setDebugMode(debug);
+    }
   };
 
   // 组件卸载时清理资源
@@ -220,6 +234,7 @@ function App() {
             selectedLanguage={selectedLanguage}
             selectedModel={selectedModel}
             isRealtime={isRealtime}
+            debugMode={debugMode}
           />
         </div>
       </main>
