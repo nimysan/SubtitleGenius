@@ -8,6 +8,32 @@
 
 *SubtitleGenius Web界面 - 支持实时语音识别和字幕生成*
 
+## 系统工作流程
+
+SubtitleGenius支持多种字幕生成路径，主要工作流程如下：
+
+### 前端界面 → WebSocket → Whisper(SageMaker)路径
+
+1. **前端界面播放文件**：用户通过Web界面上传并播放视频文件
+2. **音频处理**：通过`audioProcessor.js`（AudioWorklet）提取音频数据并进行处理
+3. **WebSocket传输**：将处理后的音频数据（WAV格式）发送到WebSocket服务器
+4. **后端处理**：WebSocket服务器保存接收到的WAV文件
+5. **AI识别**：将WAV文件提交到Whisper模型（SageMaker endpoint）进行语音识别
+6. **字幕生成**：生成的字幕实时返回给前端界面显示
+
+### 快速启动
+
+```bash
+# 启动前端（端口3000）
+cd frontend
+npm start
+
+# 启动后端WebSocket服务器（端口8000）
+uv run start_websocket_server.py
+```
+
+访问 http://localhost:3000 使用Web界面。
+
 ## Open Universal Arabic ASR Leaderboard
 
 [Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)
