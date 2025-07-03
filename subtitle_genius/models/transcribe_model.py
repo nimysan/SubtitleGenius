@@ -1,10 +1,14 @@
 """Amazon Transcribe 流式模型实现 - 使用 amazon-transcribe-streaming-sdk"""
 
 import asyncio
+import logging
 import sys
 from pathlib import Path
 from typing import List, Any, Optional, AsyncGenerator
 import numpy as np
+
+# 设置日志记录器
+logger = logging.getLogger(__name__)
 
 # 添加子模块路径
 sys.path.insert(0, str(Path(__file__).parent.parent.parent / "amazon-transcribe-streaming-sdk"))
@@ -17,11 +21,11 @@ from ..core.config import config
 try:
     from .whisper_sagemaker_streaming import WhisperSageMakerStreamingModel, WhisperSageMakerStreamConfig
     SAGEMAKER_WHISPER_AVAILABLE = True
-    print("✅ SageMaker Whisper 流式处理模块已加载")
+    logger.info("✅ SageMaker Whisper 流式处理模块已加载")
 except ImportError as e:
     SAGEMAKER_WHISPER_AVAILABLE = False
-    print(f"⚠️  SageMaker Whisper 流式处理模块不可用: {e}")
-    print("   请确保 sagemaker_whisper.py 文件存在且可访问")
+    logger.warning(f"⚠️  SageMaker Whisper 流式处理模块不可用: {e}")
+    logger.warning("   请确保 sagemaker_whisper.py 文件存在且可访问")
 
 # 导入 amazon-transcribe-streaming-sdk
 try:
@@ -29,11 +33,11 @@ try:
     from amazon_transcribe.handlers import TranscriptResultStreamHandler
     from amazon_transcribe.model import TranscriptEvent
     STREAMING_AVAILABLE = True
-    print("✅ Amazon Transcribe Streaming SDK 已加载")
+    logger.info("✅ Amazon Transcribe Streaming SDK 已加载")
 except ImportError as e:
     STREAMING_AVAILABLE = False
-    print(f"⚠️  Amazon Transcribe Streaming SDK 不可用: {e}")
-    print("   请确保子模块已正确初始化: git submodule update --init --recursive")
+    logger.warning(f"⚠️  Amazon Transcribe Streaming SDK 不可用: {e}")
+    logger.warning("   请确保子模块已正确初始化: git submodule update --init --recursive")
 
 
 class TranscribeModel(BaseModel):
@@ -69,22 +73,22 @@ class TranscribeModel(BaseModel):
     def _initialize_transcribe_client(self):
         """初始化 AWS Transcribe 流式客户端"""
         if not STREAMING_AVAILABLE:
-            print("❌ Amazon Transcribe Streaming SDK 不可用")
+            logger.error("❌ Amazon Transcribe Streaming SDK 不可用")
             return
             
         try:
             # 初始化流式客户端
             self.streaming_client = TranscribeStreamingClient(region=self.region_name)
-            print(f"✅ Transcribe 流式客户端已初始化 (区域: {self.region_name})")
+            logger.info(f"✅ Transcribe 流式客户端已初始化 (区域: {self.region_name})")
             
         except Exception as e:
-            print(f"❌ 初始化 Transcribe 流式客户端失败: {e}")
+            logger.error(f"❌ 初始化 Transcribe 流式客户端失败: {e}")
             self.streaming_client = None
     
     def _initialize_sagemaker_whisper_model(self, endpoint_name: str, config: Optional['WhisperSageMakerStreamConfig']):
         """初始化 SageMaker Whisper 流式模型"""
         if not SAGEMAKER_WHISPER_AVAILABLE:
-            print("❌ SageMaker Whisper 流式处理不可用")
+            logger.error("❌ SageMaker Whisper 流式处理不可用")
             return
             
         try:
@@ -93,10 +97,10 @@ class TranscribeModel(BaseModel):
                 region_name=self.region_name,
                 config=config or WhisperSageMakerStreamConfig()
             )
-            print(f"✅ SageMaker Whisper 流式模型已初始化 (端点: {endpoint_name})")
+            logger.info(f"✅ SageMaker Whisper 流式模型已初始化 (端点: {endpoint_name})")
             
         except Exception as e:
-            print(f"❌ 初始化 SageMaker Whisper 流式模型失败: {e}")
+            logger.error(f"❌ 初始化 SageMaker Whisper 流式模型失败: {e}")
             self.sagemaker_whisper_model = None
     
     def is_available(self) -> bool:
@@ -139,13 +143,14 @@ class TranscribeModel(BaseModel):
         if not self.is_available():
             raise RuntimeError(f"{self.backend} 后端不可用，请检查配置")
         
-        print(f"🎤 使用 {self.backend.upper()} 后端进行流式转录 (语言: {language})")
+        logger.info(f"🎤 使用 {self.backend.upper()} 后端进行流式转录 (语言: {language})")
         
         if self.backend == "transcribe":
             async for subtitle in self._transcribe_stream_aws(audio_stream, language):
                 yield subtitle
         elif self.backend == "sagemaker_whisper":
             async for subtitle in self._transcribe_stream_sagemaker_whisper(audio_stream, language):
+                logger.debug(f"----> title is {subtitle}")
                 yield subtitle
     
     async def _transcribe_stream_sagemaker_whisper(
@@ -177,7 +182,7 @@ class TranscribeModel(BaseModel):
         try:
             # 转换语言代码
             language_code = self._convert_language_code(language)
-            print(f"🎤 开始流式转录 (语言: {language_code})")
+            logger.info(f"🎤 开始流式转录 (语言: {language_code})")
             
             # 启动流式转录
             stream = await self.streaming_client.start_stream_transcription(
@@ -208,10 +213,10 @@ class TranscribeModel(BaseModel):
                     
                     # 结束音频流
                     await stream.input_stream.end_stream()
-                    print("🎤 音频流发送完成")
+                    logger.info("🎤 音频流发送完成")
                     
                 except Exception as e:
-                    print(f"❌ 音频流写入错误: {e}")
+                    logger.error(f"❌ 音频流写入错误: {e}")
                     raise
             
             # 处理转录结果
@@ -232,7 +237,7 @@ class TranscribeModel(BaseModel):
                                             subtitle_handler.add_subtitle(subtitle)
                                             
                 except Exception as e:
-                    print(f"❌ 转录结果处理错误: {e}")
+                    logger.error(f"❌ 转录结果处理错误: {e}")
                     raise
             
             # 并发执行音频写入和结果处理
@@ -246,14 +251,14 @@ class TranscribeModel(BaseModel):
             try:
                 await asyncio.wait_for(handle_task, timeout=5.0)
             except asyncio.TimeoutError:
-                print("⏰ 转录结果处理超时，返回已收集的字幕")
+                logger.warning("⏰ 转录结果处理超时，返回已收集的字幕")
             
             # 返回收集到的字幕
             for subtitle in subtitle_handler.get_subtitles():
                 yield subtitle
                 
         except Exception as e:
-            print(f"❌ 流式转录失败: {e}")
+            logger.error(f"❌ 流式转录失败: {e}")
             raise
     
     def _convert_language_code(self, language: str) -> str:
@@ -287,7 +292,7 @@ class SubtitleStreamHandler:
     
     def add_subtitle(self, subtitle: Subtitle):
         """添加新字幕"""
-        print(f"📝 [{subtitle.start:.1f}s-{subtitle.end:.1f}s] {subtitle.text}")
+        logger.info(f"📝 [{subtitle.start:.1f}s-{subtitle.end:.1f}s] {subtitle.text}")
         self.subtitles.append(subtitle)
     
     def get_subtitles(self) -> List[Subtitle]:
