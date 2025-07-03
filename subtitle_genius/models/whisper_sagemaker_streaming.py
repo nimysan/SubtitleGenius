@@ -18,7 +18,7 @@ from collections import deque
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
-from whisper_converse import WhisperSageMakerClient, chunk_audio
+from sagemaker_whisper import WhisperSageMakerClient, chunk_audio
 
 from ..subtitle.models import Subtitle
 
@@ -217,7 +217,7 @@ class WhisperSageMakerStreamingModel:
             chunk_data = chunks[0]
             
             # 调用 SageMaker 端点
-            from whisper_converse import transcribe_chunk
+            from sagemaker_whisper import transcribe_chunk
             result = transcribe_chunk(
                 self.sagemaker_client.sagemaker_runtime,
                 chunk_data,

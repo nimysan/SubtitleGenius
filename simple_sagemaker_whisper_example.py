@@ -160,7 +160,7 @@ async def batch_vs_streaming_comparison():
     # 1. 原始批处理方式
     print("🔵 原始批处理方式:")
     try:
-        from whisper_converse import WhisperSageMakerClient
+        from sagemaker_whisper import WhisperSageMakerClient
         
         batch_client = WhisperSageMakerClient(
             endpoint_name=SAGEMAKER_ENDPOINT,

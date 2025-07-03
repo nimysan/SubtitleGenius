@@ -21,7 +21,7 @@ try:
 except ImportError as e:
     SAGEMAKER_WHISPER_AVAILABLE = False
     print(f"⚠️  SageMaker Whisper 流式处理模块不可用: {e}")
-    print("   请确保 whisper_converse.py 文件存在且可访问")
+    print("   请确保 sagemaker_whisper.py 文件存在且可访问")
 
 # 导入 amazon-transcribe-streaming-sdk
 try:

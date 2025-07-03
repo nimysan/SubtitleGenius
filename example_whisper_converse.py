@@ -4,7 +4,7 @@
 基于AWS样例代码，使用SageMaker Runtime调用自定义Whisper端点
 """
 
-from whisper_converse import WhisperSageMakerClient
+from sagemaker_whisper import WhisperSageMakerClient
 from pathlib import Path
 import sys
 
