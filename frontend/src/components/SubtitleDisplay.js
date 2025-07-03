@@ -33,42 +33,24 @@ const SubtitleDisplay = ({ subtitles, currentTime }) => {
   }, [currentTime, subtitles]);
 
   const currentSubtitle = getCurrentSubtitle();
+  
+  // 反向字幕列表（最新的在上面）
+  const reversedSubtitles = [...subtitles].reverse();
 
   return (
     <div className="subtitle-display-container">
       <div className="subtitle-header">
-        <h3>字幕显示</h3>
+        <h3>字幕历史</h3>
         <div className="subtitle-info">
           <span className="current-time">当前时间: {formatTime(currentTime)}</span>
           <span className="subtitle-count">字幕数量: {subtitles.length}</span>
         </div>
       </div>
 
-      {/* 当前字幕高亮显示 */}
-      <div className="current-subtitle">
-        {currentSubtitle ? (
-          <div className="current-subtitle-content">
-            <span className="subtitle-time">
-              [{formatTime(currentSubtitle.start)} - {formatTime(currentSubtitle.end)}]
-            </span>
-            <div className="subtitle-text-container">
-              <div className="original-text">{currentSubtitle.text}</div>
-              {currentSubtitle.translated_text && (
-                <div className="translated-text">{currentSubtitle.translated_text}</div>
-              )}
-            </div>
-          </div>
-        ) : (
-          <div className="no-subtitle">
-            {subtitles.length > 0 ? '暂无字幕显示' : '请先生成字幕'}
-          </div>
-        )}
-      </div>
-
-      {/* 所有字幕列表 */}
+      {/* 字幕列表 - 反向显示，最新的在上面 */}
       <div className="subtitle-list" ref={subtitleRef}>
         {subtitles.length > 0 ? (
-          subtitles.map((subtitle) => (
+          reversedSubtitles.map((subtitle) => (
             <div
               key={subtitle.id}
               data-id={subtitle.id}

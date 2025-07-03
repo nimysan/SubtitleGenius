@@ -46,6 +46,154 @@
   border: 1px solid rgba(255, 255, 255, 0.1);
   height: auto;
   max-height: 600px; /* 设置最大高度 */
+  position: relative; /* 为最新字幕定位做准备 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 防止内容溢出 */
+}
+
+/* 最新字幕覆盖层 - 直接在视频下方 */
+.latest-subtitle-overlay {
+  margin-top: 15px;
+  background: linear-gradient(135deg, rgba(76, 175, 80, 0.95), rgba(56, 142, 60, 0.95));
+  border-radius: 12px;
+  padding: 15px;
+  border: 2px solid rgba(76, 175, 80, 0.8);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+  backdrop-filter: blur(10px);
+  animation: slideInUp 0.5s ease-out;
+  height: 240px; /* 固定高度 */
+  min-height: 240px; /* 最小高度 */
+  max-height: 240px; /* 最大高度 */
+  overflow: hidden; /* 防止内容溢出 */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between; /* 内容均匀分布 */
+}
+
+.latest-subtitle-content {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  overflow: hidden; /* 防止内容溢出 */
+}
+
+.latest-subtitle-label {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: rgba(255, 255, 255, 0.9);
+  flex-shrink: 0; /* 防止被压缩 */
+}
+
+.latest-subtitle-label .label-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.latest-subtitle-label .subtitle-info-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.75rem;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+.latest-subtitle-overlay .subtitle-info {
+  display: none; /* 隐藏原来的独立行 */
+}
+
+.live-indicator {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  font-weight: bold;
+  color: #fff;
+}
+
+.live-dot {
+  width: 8px;
+  height: 8px;
+  background: #ff4444;
+  border-radius: 50%;
+  animation: livePulse 1.5s infinite;
+}
+
+@keyframes livePulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.6; transform: scale(1.2); }
+}
+
+.latest-subtitle-overlay .subtitle-info {
+  margin-bottom: 8px;
+  flex-shrink: 0; /* 防止被压缩 */
+}
+
+.latest-subtitle-overlay .subtitle-time {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.8);
+  font-weight: 500;
+}
+
+.latest-subtitle-overlay .subtitle-text-container {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1; /* 占据剩余空间 */
+  overflow: hidden; /* 防止溢出 */
+  min-height: 0; /* 允许flex子项收缩 */
+}
+
+.latest-subtitle-overlay .original-text {
+  font-size: 1.1rem;
+  font-weight: 600;
+  line-height: 1.3;
+  color: white;
+  direction: rtl; /* 支持阿拉伯语从右到左 */
+  text-align: right;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2; /* 最多显示2行 */
+  -webkit-box-orient: vertical;
+  word-wrap: break-word;
+}
+
+.latest-subtitle-overlay .translated-text {
+  font-size: 0.95rem;
+  line-height: 1.3;
+  color: #e8f5e8;
+  font-style: italic;
+  border-top: 1px dashed rgba(255, 255, 255, 0.3);
+  padding-top: 4px;
+  text-align: left;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  display: -webkit-box;
+  -webkit-line-clamp: 2; /* 最多显示2行 */
+  -webkit-box-orient: vertical;
+  word-wrap: break-word;
+}
+
+@keyframes slideInUp {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
 }
 
 .subtitle-section {
@@ -61,6 +209,9 @@
   flex-direction: column; /* 垂直排列 */
   height: auto; /* 自动高度 */
   max-height: 600px; /* 最大高度限制，与视频区域保持一致 */
+  max-width: 450px; /* 设置最大宽度，防止过宽 */
+  width: 100%; /* 确保在容器内正常显示 */
+  margin-bottom: 20px; /* 与控制面板保持距离，防止重叠 */
 }
 
 .app-control-section {
@@ -80,12 +231,20 @@
   .subtitle-section {
     max-height: 700px; /* 大屏幕上可以更高一些 */
   }
+  
+  .subtitle-section {
+    max-width: 500px; /* 大屏幕上可以稍微宽一些 */
+  }
 }
 
 @media (min-width: 1600px) {
   .video-section,
   .subtitle-section {
     max-height: 800px; /* 超大屏幕上可以更高一些 */
+  }
+  
+  .subtitle-section {
+    max-width: 550px; /* 超大屏幕上可以更宽一些 */
   }
 }
 
@@ -100,6 +259,7 @@
   .video-section {
     grid-column: 1;
     grid-row: 1;
+    margin-bottom: 10px; /* 与字幕区域保持间距 */
   }
   
   .subtitle-section {
@@ -107,12 +267,33 @@
     grid-row: 2;
     max-height: 400px; /* 在小屏幕上减小高度 */
     height: 400px; /* 固定高度，确保一致性 */
+    max-width: 100%; /* 在移动端占满宽度 */
+    margin-bottom: 15px; /* 与控制面板保持更大间距 */
   }
   
-  .control-section {
+  .app-control-section {
     grid-column: 1;
     grid-row: 3;
     min-height: 250px;
+  }
+  
+  /* 移动端最新字幕样式调整 */
+  .latest-subtitle-overlay {
+    margin-top: 10px;
+    padding: 12px;
+    height: 100px; /* 移动端稍微减小高度 */
+    min-height: 100px;
+    max-height: 100px;
+  }
+  
+  .latest-subtitle-overlay .original-text {
+    font-size: 1rem;
+    -webkit-line-clamp: 2; /* 保持2行限制 */
+  }
+  
+  .latest-subtitle-overlay .translated-text {
+    font-size: 0.9rem;
+    -webkit-line-clamp: 1; /* 移动端翻译文本只显示1行 */
   }
 }
 
@@ -128,12 +309,56 @@
   
   .video-section,
   .subtitle-section,
-  .control-section {
+  .app-control-section {
     padding: 15px;
+  }
+  
+  .video-section {
+    margin-bottom: 8px; /* 与字幕区域保持间距 */
   }
   
   .subtitle-section {
     max-height: 350px; /* 在更小的屏幕上进一步减小高度 */
     height: 350px;
+    margin-bottom: 12px; /* 与控制面板保持间距 */
+  }
+  
+  /* 小屏幕最新字幕样式 */
+  .latest-subtitle-overlay {
+    margin-top: 8px;
+    padding: 10px;
+    height: 90px; /* 小屏幕进一步减小高度 */
+    min-height: 90px;
+    max-height: 90px;
+  }
+  
+  .latest-subtitle-label {
+    font-size: 0.8rem;
+    margin-bottom: 4px; /* 减小间距 */
+    flex-wrap: wrap; /* 允许换行 */
+    gap: 4px;
+  }
+  
+  .latest-subtitle-label .label-left {
+    gap: 6px;
+  }
+  
+  .latest-subtitle-label .subtitle-info-inline {
+    font-size: 0.7rem;
+    gap: 8px;
+  }
+  
+  .live-indicator {
+    font-size: 0.7rem;
+  }
+  
+  .latest-subtitle-overlay .original-text {
+    font-size: 0.95rem;
+    -webkit-line-clamp: 2;
+  }
+  
+  .latest-subtitle-overlay .translated-text {
+    font-size: 0.85rem;
+    -webkit-line-clamp: 1;
   }
 }

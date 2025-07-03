@@ -37,6 +37,13 @@ function App() {
     setCurrentTime(time);
   };
 
+  // 格式化时间显示
+  const formatTime = (seconds) => {
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+  };
+
   // 处理音频数据
   const handleAudioData = useCallback(async (audioData, audioInfo = {}) => {
     try {
@@ -215,6 +222,34 @@ function App() {
             onAudioData={handleAudioData}
             ref={videoRef}
           />
+          
+          {/* 最新字幕直接显示在视频下方 */}
+          {subtitles.length > 0 && (
+            <div className="latest-subtitle-overlay">
+              <div className="latest-subtitle-content">
+                <div className="latest-subtitle-label">
+                  <div className="label-left">
+                    <span>最新字幕</span>
+                    <div className="live-indicator">
+                      <span className="live-dot"></span>
+                      <span>LIVE</span>
+                    </div>
+                  </div>
+                  <div className="subtitle-info-inline">
+                    <span className="subtitle-time">
+                      [{formatTime(subtitles[subtitles.length - 1].start)} - {formatTime(subtitles[subtitles.length - 1].end)}]
+                    </span>
+                  </div>
+                </div>
+                <div className="subtitle-text-container">
+                  <div className="original-text">{subtitles[subtitles.length - 1].text}</div>
+                  {subtitles[subtitles.length - 1].translated_text && (
+                    <div className="translated-text">{subtitles[subtitles.length - 1].translated_text}</div>
+                  )}
+                </div>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="subtitle-section">
