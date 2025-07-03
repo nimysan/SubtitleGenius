@@ -150,7 +150,6 @@ class TranscribeModel(BaseModel):
                 yield subtitle
         elif self.backend == "sagemaker_whisper":
             async for subtitle in self._transcribe_stream_sagemaker_whisper(audio_stream, language):
-                logger.debug(f"----> title is {subtitle}")
                 yield subtitle
     
     async def _transcribe_stream_sagemaker_whisper(

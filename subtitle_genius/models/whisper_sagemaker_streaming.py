@@ -28,8 +28,8 @@ logger = logging.getLogger(__name__)
 @dataclass
 class WhisperSageMakerStreamConfig:
     """SageMaker Whisper 流式处理配置"""
-    chunk_duration: float = 3.0      # 每次处理的音频长度(秒)
-    overlap_duration: float = 0.5    # 重叠时间(秒)
+    chunk_duration: float = 30      # 每次处理的音频长度(秒)
+    overlap_duration: float = 3    # 重叠时间(秒)
     sample_rate: int = 16000         # 采样率
     min_silence_duration: float = 0.3 # 最小静音时长
     voice_threshold: float = 0.01    # 语音活动检测阈值
@@ -148,7 +148,8 @@ class WhisperSageMakerStreamingModel:
                 buffer.add_chunk(audio_chunk)
                 
                 # 当缓冲区准备好时处理
-                while buffer.ready_for_processing():
+                # ready_for_processing 的计算就是 duration*sample rate的
+                while buffer.ready_for_processing(): 
                     wav_data = buffer.get_processing_chunk()
                     
                     if wav_data is None:
@@ -186,6 +187,7 @@ class WhisperSageMakerStreamingModel:
             raise
         finally:
             # 处理剩余缓冲区内容并获取最终字幕
+            # TODO 当一些数据不匹配的时候，就会有剩余的缓冲区出来 这里需要详细理解一下
             final_subtitle = await self._process_remaining_buffer(buffer, language)
             if final_subtitle:
                 yield final_subtitle  # 如果有最终字幕，发送出去

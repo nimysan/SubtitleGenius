@@ -8,8 +8,8 @@ class AudioProcessor extends AudioWorkletProcessor {
     this.actualSampleRate = options.processorOptions?.sampleRate || sampleRate || 44100;
     this.targetSampleRate = 16000; // 目标采样率（用于后端处理）
     
-    // 调整缓冲区大小为30秒的音频数据（基于实际采样率）
-    this.chunkDuration = 3; // 每个chunk的时长（秒）
+    // 调整缓冲区大小为chunkDuration秒的音频数据（基于实际采样率）
+    this.chunkDuration = 30; // 每个chunk的时长（秒）要考虑单个WAV大小和网络发送的时间
     this.bufferSize = this.actualSampleRate * this.chunkDuration;
     this.buffer = new Float32Array(this.bufferSize);
     this.bufferIndex = 0;
