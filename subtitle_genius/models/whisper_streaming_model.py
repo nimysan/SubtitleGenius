@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from collections import deque
 import time
 
-from ..subtitle.subtitle import Subtitle
+from ..subtitle.models import Subtitle
 
 logger = logging.getLogger(__name__)
 

@@ -1,0 +1,77 @@
+.video-player-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.video-player {
+  width: 100%;
+  height: auto;
+  max-height: 100%;
+  border-radius: 10px;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+}
+
+.video-placeholder {
+  width: 100%;
+  height: 400px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(255, 255, 255, 0.05);
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+}
+
+.video-placeholder:hover {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.5);
+}
+
+.placeholder-content {
+  text-align: center;
+  color: rgba(255, 255, 255, 0.8);
+}
+
+.placeholder-icon {
+  font-size: 4rem;
+  margin-bottom: 20px;
+  opacity: 0.6;
+}
+
+.placeholder-content h3 {
+  margin: 0 0 10px 0;
+  font-size: 1.5rem;
+  font-weight: 600;
+}
+
+.placeholder-content p {
+  margin: 0;
+  font-size: 1rem;
+  opacity: 0.7;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .video-placeholder {
+    height: 250px;
+  }
+  
+  .placeholder-icon {
+    font-size: 3rem;
+    margin-bottom: 15px;
+  }
+  
+  .placeholder-content h3 {
+    font-size: 1.2rem;
+  }
+  
+  .placeholder-content p {
+    font-size: 0.9rem;
+  }
+}

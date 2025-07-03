@@ -1,0 +1,259 @@
+.control-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+  gap: 25px;
+  align-items: start;
+  width: 100%;
+}
+
+.control-section {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 10px;
+  padding: 20px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.control-section h4 {
+  margin: 0 0 15px 0;
+  font-size: 1.1rem;
+  color: white;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  padding-bottom: 8px;
+}
+
+/* 文件上传区域 */
+.upload-area {
+  text-align: center;
+  padding: 25px 20px;
+  border: 2px dashed rgba(255, 255, 255, 0.3);
+  border-radius: 10px;
+  transition: all 0.3s ease;
+  cursor: pointer;
+  min-height: 120px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 12px;
+}
+
+.upload-area:hover {
+  border-color: rgba(255, 255, 255, 0.5);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.upload-button {
+  background: linear-gradient(45deg, #4CAF50, #45a049);
+  color: white;
+  border: none;
+  padding: 12px 24px;
+  border-radius: 25px;
+  font-size: 1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  box-shadow: 0 4px 15px rgba(76, 175, 80, 0.3);
+}
+
+.upload-button:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(76, 175, 80, 0.4);
+}
+
+.upload-icon {
+  font-size: 1.2rem;
+}
+
+.upload-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.6);
+}
+
+/* 字幕生成控制 */
+.generation-controls {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+  align-items: center;
+}
+
+.generate-button {
+  background: linear-gradient(45deg, #2196F3, #1976D2);
+  color: white;
+  border: none;
+  padding: 15px 30px;
+  border-radius: 25px;
+  font-size: 1.1rem;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 15px rgba(33, 150, 243, 0.3);
+  min-width: 160px;
+  justify-content: center;
+}
+
+.generate-button:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(33, 150, 243, 0.4);
+}
+
+.generate-button:disabled {
+  background: rgba(255, 255, 255, 0.2);
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.generate-button.processing {
+  background: linear-gradient(45deg, #FF9800, #F57C00);
+}
+
+.generate-icon {
+  font-size: 1.3rem;
+}
+
+.loading-spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top: 2px solid white;
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.generation-info {
+  margin: 0;
+  width: 100%;
+}
+
+.info-text {
+  margin: 0;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  font-style: italic;
+}
+
+/* 设置控制 */
+.settings-controls {
+  display: flex;
+  flex-direction: column;
+  gap: 15px;
+}
+
+.setting-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 0.95rem;
+}
+
+.setting-item label {
+  color: rgba(255, 255, 255, 0.8);
+  min-width: 60px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.setting-item select {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.2);
+  color: white;
+  font-size: 0.9rem;
+}
+
+.setting-item select:focus {
+  outline: none;
+  border-color: #4CAF50;
+  box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
+}
+
+.setting-item input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  accent-color: #4CAF50;
+}
+
+/* 响应式设计 */
+@media (max-width: 1024px) {
+  .control-panel {
+    grid-template-columns: 1fr;
+    gap: 20px;
+  }
+}
+
+@media (max-width: 768px) {
+  .control-panel {
+    grid-template-columns: 1fr;
+    gap: 15px;
+  }
+  
+  .control-section {
+    padding: 15px;
+  }
+  
+  .upload-area {
+    padding: 20px 15px;
+    min-height: 100px;
+  }
+  
+  .upload-button {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+  }
+  
+  .generate-button {
+    padding: 12px 24px;
+    font-size: 1rem;
+    min-width: 140px;
+  }
+  
+  .setting-item {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+  
+  .setting-item label {
+    min-width: auto;
+  }
+}
+
+@media (max-width: 480px) {
+  .control-panel {
+    gap: 12px;
+  }
+  
+  .control-section {
+    padding: 12px;
+  }
+  
+  .upload-area {
+    padding: 15px 10px;
+    min-height: 80px;
+  }
+  
+  .upload-button {
+    padding: 8px 16px;
+    font-size: 0.85rem;
+  }
+  
+  .generate-button {
+    padding: 10px 20px;
+    font-size: 0.9rem;
+    min-width: 120px;
+  }
+}

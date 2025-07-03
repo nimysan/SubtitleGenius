@@ -1,0 +1,200 @@
+.subtitle-display-container {
+  height: 100%;
+  max-height: 600px; /* 设置最大高度，与视频播放器保持一致 */
+  display: flex;
+  flex-direction: column;
+  overflow: hidden; /* 防止内容溢出 */
+}
+
+.subtitle-header {
+  margin-bottom: 20px;
+  padding-bottom: 15px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.subtitle-header h3 {
+  margin: 0 0 10px 0;
+  font-size: 1.3rem;
+  color: white;
+}
+
+.subtitle-info {
+  display: flex;
+  justify-content: space-between;
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.current-subtitle {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 10px;
+  padding: 15px;
+  margin-bottom: 20px;
+  min-height: 60px;
+  display: flex;
+  align-items: center;
+  border-left: 4px solid #4CAF50;
+}
+
+.current-subtitle-content {
+  width: 100%;
+}
+
+.current-subtitle-content .subtitle-time {
+  display: block;
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+  margin-bottom: 5px;
+}
+
+.current-subtitle-content .subtitle-text {
+  font-size: 1.1rem;
+  font-weight: 500;
+  line-height: 1.4;
+  color: white;
+  direction: rtl; /* 支持阿拉伯语从右到左 */
+  text-align: right;
+}
+
+.no-subtitle {
+  color: rgba(255, 255, 255, 0.5);
+  font-style: italic;
+  text-align: center;
+}
+
+.subtitle-list {
+  flex: 1;
+  overflow-y: auto;
+  padding-right: 10px;
+  max-height: 400px; /* 设置最大高度，留出空间给其他元素 */
+}
+
+.subtitle-list::-webkit-scrollbar {
+  width: 6px;
+}
+
+.subtitle-list::-webkit-scrollbar-track {
+  background: rgba(255, 255, 255, 0.1);
+  border-radius: 3px;
+}
+
+.subtitle-list::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.3);
+  border-radius: 3px;
+}
+
+.subtitle-list::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.5);
+}
+
+.subtitle-item {
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 10px;
+  transition: all 0.3s ease;
+  border-left: 3px solid transparent;
+}
+
+.subtitle-item:hover {
+  background: rgba(255, 255, 255, 0.1);
+  transform: translateX(5px);
+}
+
+.subtitle-item.active {
+  background: rgba(76, 175, 80, 0.2);
+  border-left-color: #4CAF50;
+  box-shadow: 0 2px 8px rgba(76, 175, 80, 0.3);
+}
+
+.subtitle-timeline {
+  margin-bottom: 8px;
+}
+
+.subtitle-time-range {
+  font-size: 0.8rem;
+  color: rgba(255, 255, 255, 0.6);
+  background: rgba(0, 0, 0, 0.2);
+  padding: 2px 8px;
+  border-radius: 12px;
+  display: inline-block;
+}
+
+.subtitle-content {
+  font-size: 0.95rem;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.9);
+  direction: rtl; /* 支持阿拉伯语从右到左 */
+  text-align: right;
+}
+
+.empty-subtitles {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: rgba(255, 255, 255, 0.5);
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 3rem;
+  margin-bottom: 20px;
+  opacity: 0.6;
+}
+
+.empty-subtitles p {
+  margin: 5px 0;
+}
+
+.empty-hint {
+  font-size: 0.9rem;
+  opacity: 0.7;
+}
+
+/* 固定高度响应式调整 */
+@media (min-width: 1200px) {
+  .subtitle-display-container {
+    max-height: 700px; /* 大屏幕上可以更高一些 */
+  }
+  
+  .subtitle-list {
+    max-height: 500px;
+  }
+}
+
+@media (min-width: 1600px) {
+  .subtitle-display-container {
+    max-height: 800px; /* 超大屏幕上可以更高一些 */
+  }
+  
+  .subtitle-list {
+    max-height: 600px;
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+  .subtitle-info {
+    flex-direction: column;
+    gap: 5px;
+  }
+  
+  .current-subtitle {
+    padding: 12px;
+  }
+  
+  .current-subtitle-content .subtitle-text {
+    font-size: 1rem;
+  }
+  
+  .subtitle-item {
+    padding: 10px;
+  }
+  
+  .empty-icon {
+    font-size: 2.5rem;
+    margin-bottom: 15px;
+  }
+}

@@ -1,0 +1,139 @@
+.App {
+  text-align: center;
+  min-height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: white;
+}
+
+.App-header {
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.1);
+  backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.App-header h1 {
+  margin: 0;
+  font-size: 2.5rem;
+  font-weight: bold;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+}
+
+.App-header p {
+  margin: 10px 0 0 0;
+  font-size: 1.1rem;
+  opacity: 0.9;
+}
+
+.App-main {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 20px;
+  padding: 20px;
+  max-width: 1400px;
+  margin: 0 auto;
+  min-height: calc(100vh - 140px);
+}
+
+.video-section {
+  grid-column: 1;
+  grid-row: 1;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  height: auto;
+  max-height: 600px; /* 设置最大高度 */
+}
+
+.subtitle-section {
+  grid-column: 2;
+  grid-row: 1;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  overflow: hidden;
+  display: flex; /* 使用flex布局 */
+  flex-direction: column; /* 垂直排列 */
+  height: auto; /* 自动高度 */
+  max-height: 600px; /* 最大高度限制，与视频区域保持一致 */
+}
+
+.app-control-section {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  min-height: 200px;
+}
+
+/* 大屏幕适配 */
+@media (min-width: 1200px) {
+  .video-section,
+  .subtitle-section {
+    max-height: 700px; /* 大屏幕上可以更高一些 */
+  }
+}
+
+@media (min-width: 1600px) {
+  .video-section,
+  .subtitle-section {
+    max-height: 800px; /* 超大屏幕上可以更高一些 */
+  }
+}
+
+/* 响应式设计 */
+@media (max-width: 1024px) {
+  .App-main {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    min-height: auto;
+  }
+  
+  .video-section {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  
+  .subtitle-section {
+    grid-column: 1;
+    grid-row: 2;
+    max-height: 400px; /* 在小屏幕上减小高度 */
+    height: 400px; /* 固定高度，确保一致性 */
+  }
+  
+  .control-section {
+    grid-column: 1;
+    grid-row: 3;
+    min-height: 250px;
+  }
+}
+
+@media (max-width: 768px) {
+  .App-header h1 {
+    font-size: 2rem;
+  }
+  
+  .App-main {
+    padding: 10px;
+    gap: 15px;
+  }
+  
+  .video-section,
+  .subtitle-section,
+  .control-section {
+    padding: 15px;
+  }
+  
+  .subtitle-section {
+    max-height: 350px; /* 在更小的屏幕上进一步减小高度 */
+    height: 350px;
+  }
+}
