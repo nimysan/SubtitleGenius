@@ -58,6 +58,41 @@ uv run start_websocket_server.py
 
 访问 http://localhost:3000 使用Web界面。
 
+## 📊 纠错效果分析
+
+### [阿拉伯语足球解说纠正分析-基于Claude Haiku](docs/subtitle_correction_analysis.md)
+
+**测试场景**: 阿拉伯语足球比赛实时解说字幕  
+**纠正模型**: Amazon Bedrock Claude 3 Haiku  
+**测试样本**: 利物浦vs巴黎圣日耳曼足球比赛解说片段  
+**纠正流程**: Whisper语音识别 → Claude Haiku智能纠错 → 多语言翻译  
+
+**核心能力展示**:
+- 🎯 **语音识别错误修复**: 将Whisper产生的无意义识别结果转换为有意义的足球解说
+- ⚽ **专业术语标准化**: 自动识别并转换足球专业术语（如"يا سلام" → "هدف"进球）
+- 👤 **人名识别纠正**: 准确识别球员姓名（如萨拉赫、伊布拉希姆等）
+- 🧠 **语境感知纠错**: 基于足球解说场景进行智能纠错和优化
+- 🔧 **噪音清理**: 有效清理语音识别产生的重复字符和无意义内容
+
+**测试结果**: 84.6%纠错成功率（18/26条优秀，4/26条良好）
+
+### [Claude Haiku vs Sonnet 3.7 纠错模型对比分析](docs/model_comparison_analysis.md)
+
+**对比场景**: 阿拉伯语足球解说字幕纠错效果对比  
+**测试模型**: Claude 3 Haiku vs Claude 3.5 Sonnet  
+**测试样本**: 相同的26条足球解说字幕片段  
+**对比维度**: 语义理解、专业术语、激情保持、专有名词识别  
+
+**关键发现**:
+- 🏆 **Sonnet 3.7整体胜出**: 65% vs 31%的胜率优势
+- 🎯 **语义理解**: Sonnet在复杂语义理解方面表现更佳
+- ⚽ **激情保持**: Sonnet更好地保持足球解说的生动性和激情
+- 👤 **专有名词**: Sonnet在球员姓名和绰号识别方面更准确
+- 🔧 **术语标准化**: Haiku在专业术语统一性方面有优势
+- 💰 **成本效益**: Haiku处理速度更快，适合大批量处理
+
+**使用建议**: 高质量场合推荐Sonnet 3.7，大批量快速处理推荐Haiku
+
 ## Open Universal Arabic ASR Leaderboard
 
 [Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)
