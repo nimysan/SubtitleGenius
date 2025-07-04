@@ -93,6 +93,23 @@ uv run start_websocket_server.py
 
 **使用建议**: 高质量场合推荐Sonnet 3.7，大批量快速处理推荐Haiku
 
+### [中文足球解说字幕分析-Chunk大小优化](docs/chinese_football_subtitle_analysis.md)
+
+**分析场景**: 中文足球解说字幕时间戳和内容分析  
+**样本数据**: 4.3分钟中文足球解说字幕，26条字幕  
+**分析目标**: 优化音频chunk分段大小，提升字幕质量  
+
+**关键发现**:
+- 📊 **语言特征**: 平均每句30-35字，语速3.12字/秒
+- ⏱️ **时长分布**: 每句话包含1-2个完整语义单元
+- 🎯 **最优分段**: 推荐7秒chunk，平衡实时性和语义完整性
+- 📈 **效果预期**: 相比10秒分段，延迟减少30%，语义完整性提升40-50%
+
+**技术建议**:
+- 🔧 **基础配置**: 7秒基础分段，6-8秒动态调整范围
+- 🎙️ **语音适配**: 根据语速和停顿动态调整边界
+- 📝 **内容优化**: 目标22字/chunk，最大35字/chunk
+
 ## Open Universal Arabic ASR Leaderboard
 
 [Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)
