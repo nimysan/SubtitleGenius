@@ -12,7 +12,7 @@ function App() {
   const [isProcessing, setIsProcessing] = useState(false);
   const [socket, setSocket] = useState(null);
   const [selectedLanguage, setSelectedLanguage] = useState('ar');
-  const [selectedModel, setSelectedModel] = useState('transcribe');
+  const [selectedModel, setSelectedModel] = useState('whisper');
   const [isRealtime, setIsRealtime] = useState(true);
   const [debugMode, setDebugMode] = useState(false); // 调试模式状态
   const [clientId, setClientId] = useState(null); // 客户端ID

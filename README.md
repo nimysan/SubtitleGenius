@@ -336,6 +336,8 @@ aws sts get-caller-identity
 
 ```bash
 yt-dlp --cookies-from-browser chrome –-merge-output-format mp4 https://youtu.be/0PggkKx9m54  
+# 下载 巴黎vslivepool
+yt-dlp --cookies-from-browser chrome https://www.youtube.com/watch\?v\=9wTYKRvGdjo
 ffmpeg -i input.webm -c:v libx264 -crf 23 -c:a aac -b:a 128k output.mp4
 ```
 

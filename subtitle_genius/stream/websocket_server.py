@@ -56,7 +56,7 @@ sagemaker_whisper_model = None
 # SageMaker Whisper 配置
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT", "endpoint-quick-start-z9afg")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-SAGEMAKER_CHUNK_DURATION = int(os.getenv("SAGEMAKER_CHUNK_DURATION", "30"))
+SAGEMAKER_CHUNK_DURATION = int(os.getenv("SAGEMAKER_CHUNK_DURATION", "10"))
 
 # 临时文件目录
 temp_dir = Path(tempfile.gettempdir()) / "subtitle_genius"
@@ -76,7 +76,7 @@ async def startup_event():
         # 配置参数
         config = WhisperSageMakerStreamConfig(
             chunk_duration=30,      # 每duration秒处理一次
-            overlap_duration=2,    # 2秒重叠避免截断
+            overlap_duration=0,    # 2秒重叠避免截断
             voice_threshold=0.01,    # 语音检测阈值
             sagemaker_chunk_duration=SAGEMAKER_CHUNK_DURATION  # SageMaker 端点处理的块大小
         )

@@ -165,8 +165,9 @@ const ControlPanel = ({
               onChange={handleModelChange}
               disabled={isProcessing}
             >
-              <option value="transcribe">Amazon Transcribe</option>
-              <option value="whisper">OpenAI Whisper</option>
+             
+              <option value="whisper">Whisper In SageMaker</option>
+               <option value="transcribe">Amazon Transcribe</option>
               <option value="claude">Claude</option>
             </select>
           </div>
