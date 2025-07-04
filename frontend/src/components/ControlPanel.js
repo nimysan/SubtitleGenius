@@ -10,20 +10,26 @@ const ControlPanel = ({
   selectedLanguage = 'ar',
   selectedModel = 'whisper',
   isRealtime = true,
-  debugMode = false
+  debugMode = false,
+  enableCorrection = true,
+  enableTranslation = true,
+  targetLanguage = 'en'
 }) => {
   const fileInputRef = useRef(null);
   const [language, setLanguage] = useState(selectedLanguage);
   const [model, setModel] = useState(selectedModel);
   const [realtime, setRealtime] = useState(isRealtime);
   const [debug, setDebug] = useState(debugMode);
+  const [correction, setCorrection] = useState(enableCorrection);
+  const [translation, setTranslation] = useState(enableTranslation);
+  const [translationTarget, setTranslationTarget] = useState(targetLanguage);
 
   // 当设置变更时通知父组件
   useEffect(() => {
     if (onSettingsChange) {
-      onSettingsChange(language, model, realtime, debug);
+      onSettingsChange(language, model, realtime, debug, correction, translation, translationTarget);
     }
-  }, [language, model, realtime, debug, onSettingsChange]);
+  }, [language, model, realtime, debug, correction, translation, translationTarget, onSettingsChange]);
 
   const handleFileSelect = (event) => {
     const file = event.target.files[0];
@@ -77,6 +83,18 @@ const ControlPanel = ({
 
   const handleDebugModeChange = (e) => {
     setDebug(e.target.checked);
+  };
+
+  const handleCorrectionChange = (e) => {
+    setCorrection(e.target.checked);
+  };
+
+  const handleTranslationChange = (e) => {
+    setTranslation(e.target.checked);
+  };
+
+  const handleTranslationTargetChange = (e) => {
+    setTranslationTarget(e.target.value);
   };
 
   return (
@@ -142,7 +160,7 @@ const ControlPanel = ({
         <h4>设置选项</h4>
         <div className="settings-controls">
           <div className="setting-item">
-            <label htmlFor="language-select">语言:</label>
+            <label htmlFor="language-select">视频语言:</label>
             <select 
               id="language-select" 
               value={language}
@@ -173,6 +191,29 @@ const ControlPanel = ({
           </div>
           
           <div className="setting-item">
+            <label htmlFor="translation-target-select">翻译目标语言:</label>
+            <select 
+              id="translation-target-select" 
+              value={translationTarget}
+              onChange={handleTranslationTargetChange}
+              disabled={isProcessing || !translation}
+            >
+              <option value="en">English</option>
+              <option value="zh">中文 (Chinese)</option>
+              <option value="ar">العربية (Arabic)</option>
+              <option value="fr">Français (French)</option>
+              <option value="es">Español (Spanish)</option>
+              <option value="de">Deutsch (German)</option>
+              <option value="ja">日本語 (Japanese)</option>
+              <option value="ko">한국어 (Korean)</option>
+              <option value="ru">Русский (Russian)</option>
+              <option value="pt">Português (Portuguese)</option>
+              <option value="it">Italiano (Italian)</option>
+              <option value="nl">Nederlands (Dutch)</option>
+            </select>
+          </div>
+          
+          <div className="setting-item">
             <label>
               <input 
                 type="checkbox" 
@@ -193,6 +234,30 @@ const ControlPanel = ({
                 disabled={isProcessing}
               />
               调试模式 (保存WAV文件)
+            </label>
+          </div>
+          
+          <div className="setting-item">
+            <label>
+              <input 
+                type="checkbox" 
+                checked={correction}
+                onChange={handleCorrectionChange}
+                disabled={isProcessing}
+              />
+              启用智能纠错
+            </label>
+          </div>
+          
+          <div className="setting-item">
+            <label>
+              <input 
+                type="checkbox" 
+                checked={translation}
+                onChange={handleTranslationChange}
+                disabled={isProcessing}
+              />
+              启用多语言翻译
             </label>
           </div>
         </div>

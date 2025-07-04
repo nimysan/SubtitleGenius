@@ -150,6 +150,35 @@
   gap: 15px;
 }
 
+/* 设置分组 */
+.settings-group {
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 15px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.settings-group-title {
+  font-size: 0.9rem;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+/* 翻译相关设置的特殊样式 */
+.translation-settings {
+  border-color: rgba(33, 150, 243, 0.2);
+  background: rgba(33, 150, 243, 0.05);
+}
+
+.translation-settings.disabled {
+  opacity: 0.6;
+  background: rgba(255, 255, 255, 0.02);
+  border-color: rgba(255, 255, 255, 0.05);
+}
+
 .setting-item {
   display: flex;
   align-items: center;
@@ -173,6 +202,7 @@
   background: rgba(0, 0, 0, 0.2);
   color: white;
   font-size: 0.9rem;
+  transition: all 0.3s ease;
 }
 
 .setting-item select:focus {
@@ -181,10 +211,71 @@
   box-shadow: 0 0 0 2px rgba(76, 175, 80, 0.2);
 }
 
+.setting-item select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background: rgba(0, 0, 0, 0.1);
+}
+
+/* 翻译目标语言选择器特殊样式 */
+#translation-target-select:disabled {
+  background: rgba(255, 255, 255, 0.05);
+  color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
 .setting-item input[type="checkbox"] {
   width: 16px;
   height: 16px;
   accent-color: #4CAF50;
+}
+
+/* 特殊样式：纠错和翻译选项 */
+.setting-item:has(input[type="checkbox"]) label {
+  cursor: pointer;
+  transition: color 0.2s ease;
+}
+
+.setting-item:has(input[type="checkbox"]) label:hover {
+  color: rgba(255, 255, 255, 0.9);
+}
+
+/* 为纠错选项添加特殊图标 */
+.setting-item label:has(input[type="checkbox"]) {
+  position: relative;
+  padding-left: 24px;
+}
+
+.setting-item label:has(input[type="checkbox"])::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 18px;
+  height: 18px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  transition: all 0.3s ease;
+}
+
+.setting-item input[type="checkbox"]:checked + span::before,
+.setting-item label:has(input[type="checkbox"]:checked)::before {
+  background: linear-gradient(45deg, #4CAF50, #45a049);
+  border-color: #4CAF50;
+}
+
+.setting-item input[type="checkbox"]:checked + span::after,
+.setting-item label:has(input[type="checkbox"]:checked)::after {
+  content: '✓';
+  position: absolute;
+  left: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: white;
+  font-size: 12px;
+  font-weight: bold;
 }
 
 /* 响应式设计 */

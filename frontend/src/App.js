@@ -15,6 +15,9 @@ function App() {
   const [selectedModel, setSelectedModel] = useState('whisper');
   const [isRealtime, setIsRealtime] = useState(true);
   const [debugMode, setDebugMode] = useState(false); // 调试模式状态
+  const [enableCorrection, setEnableCorrection] = useState(true); // 启用纠错
+  const [enableTranslation, setEnableTranslation] = useState(true); // 启用翻译
+  const [targetLanguage, setTargetLanguage] = useState('en'); // 翻译目标语言
   const [clientId, setClientId] = useState(null); // 客户端ID
   const [saveStatus, setSaveStatus] = useState({ saving: false, message: '', success: false });
   
@@ -96,8 +99,18 @@ function App() {
         break;
     }
     
-    // 添加语言参数
-    wsUrl += `?language=${selectedLanguage}`;
+    // 添加语言参数和处理选项
+    wsUrl += `?language=${selectedLanguage}&correction=${enableCorrection}&translation=${enableTranslation}&target_language=${targetLanguage}`;
+    
+    // 添加调试日志
+    console.log('建立WebSocket连接:', {
+      model: selectedModel,
+      language: selectedLanguage,
+      correction: enableCorrection,
+      translation: enableTranslation,
+      targetLanguage: targetLanguage,
+      url: wsUrl
+    });
     
     // 创建WebSocket连接
     const newSocket = createWebSocketConnection(
@@ -106,6 +119,8 @@ function App() {
       (event) => {
         try {
           const data = JSON.parse(event.data);
+          console.log('收到WebSocket消息:', data);
+          
           if (data.type === 'subtitle') {
             // 添加新字幕
             setSubtitles(prev => {
@@ -124,7 +139,14 @@ function App() {
           } else if (data.type === 'connection' && data.status === 'connected') {
             // 保存客户端ID
             setClientId(data.client_id);
-            console.log('已连接到服务器，客户端ID:', data.client_id);
+            console.log('已连接到服务器:', {
+              clientId: data.client_id,
+              model: data.model,
+              language: data.language,
+              correctionEnabled: data.correction_enabled,
+              translationEnabled: data.translation_enabled,
+              targetLanguage: data.target_language
+            });
           }
         } catch (error) {
           console.error('解析WebSocket消息失败:', error);
@@ -132,7 +154,7 @@ function App() {
       },
       // 连接打开
       () => {
-        console.log('WebSocket连接已建立');
+        console.log('WebSocket连接已建立，URL:', wsUrl);
       },
       // 连接关闭
       () => {
@@ -151,7 +173,7 @@ function App() {
     
     setSocket(newSocket);
     return newSocket;
-  }, [selectedLanguage, selectedModel]);
+  }, [selectedLanguage, selectedModel, enableCorrection, enableTranslation, targetLanguage]);
 
   // 生成字幕
   const handleGenerateSubtitles = () => {
@@ -191,12 +213,43 @@ function App() {
   };
 
   // 处理设置变更
-  const handleSettingsChange = (language, model, realtime, debug) => {
+  const handleSettingsChange = (language, model, realtime, debug, correction, translation, translationTarget) => {
+    console.log('设置变更:', {
+      language, model, realtime, debug, correction, translation, translationTarget
+    });
+    
+    // 检查是否有关键参数变更
+    const hasKeyParameterChange = (
+      language !== selectedLanguage ||
+      model !== selectedModel ||
+      correction !== enableCorrection ||
+      translation !== enableTranslation ||
+      translationTarget !== targetLanguage
+    );
+    
+    // 更新状态
     setSelectedLanguage(language);
     setSelectedModel(model);
     setIsRealtime(realtime);
     if (debug !== undefined) {
       setDebugMode(debug);
+    }
+    if (correction !== undefined) {
+      setEnableCorrection(correction);
+    }
+    if (translation !== undefined) {
+      setEnableTranslation(translation);
+    }
+    if (translationTarget !== undefined) {
+      setTargetLanguage(translationTarget);
+    }
+    
+    // 如果有关键参数变更且当前有活跃连接，重新建立连接
+    if (hasKeyParameterChange && socket && socket.readyState === WebSocket.OPEN) {
+      console.log('关键参数变更，重新建立WebSocket连接');
+      socket.close();
+      setSocket(null);
+      // 连接会在下次处理时自动重新建立
     }
   };
   
@@ -324,6 +377,9 @@ function App() {
             selectedModel={selectedModel}
             isRealtime={isRealtime}
             debugMode={debugMode}
+            enableCorrection={enableCorrection}
+            enableTranslation={enableTranslation}
+            targetLanguage={targetLanguage}
           />
         </div>
       </main>

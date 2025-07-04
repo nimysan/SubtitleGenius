@@ -41,7 +41,7 @@ class VTTProcessor:
     """VTT字幕处理器"""
     
     def __init__(self):
-        self.corrector = BedrockCorrectionService()
+        self.corrector = BedrockCorrectionService(model_id="us.anthropic.claude-3-7-sonnet-20250219-v1:0")
         self.translator = BedrockTranslator()
         self.history_subtitles = []
     

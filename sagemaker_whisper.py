@@ -8,9 +8,13 @@ import time
 import os
 import subprocess
 import tempfile
+import logging
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 from io import BytesIO
+
+# 配置日志记录
+logger = logging.getLogger(__name__)
 
 def check_ffmpeg():
     """Check if FFmpeg is available in the environment."""
@@ -211,8 +215,9 @@ def chunk_audio(audio_data, chunk_duration_seconds=30):
 def transcribe_chunk(sagemaker_client, chunk_data, endpoint_name, language="en", task="transcribe"):
     """Transcribe a single audio chunk using SageMaker runtime with Whisper endpoint."""
     try:
-        print(f"Using SageMaker endpoint: {endpoint_name}")
-        print(f"Sending request with audio size: {len(chunk_data)} bytes")
+        logger.info(f"Using SageMaker endpoint: {endpoint_name}")
+        logger.info(f"Sending request with audio size: {len(chunk_data)} bytes")
+        logger.info(f"Language parameter: {language}")
         
         # Convert audio to hex string (format expected by Whisper endpoints)
         hex_audio = chunk_data.hex()
@@ -234,18 +239,18 @@ def transcribe_chunk(sagemaker_client, chunk_data, endpoint_name, language="en",
         
         # Parse the response
         response_body = json.loads(response['Body'].read().decode('utf-8'))
-        print(f"Response received from SageMaker endpoint")
+        logger.info(f"Response received from SageMaker endpoint")
         
         # 打印payload但排除audio_input字段
         payload_log = {k: v for k, v in payload.items() if k != 'audio_input'}
-        print(f"Payload (excluding audio_input): {payload_log}")
+        logger.info(f"Payload (excluding audio_input): {payload_log}")
         
-        print(f"Response body: {response_body}")
+        logger.info(f"Response body: {response_body}")
         
         return response_body
         
     except Exception as e:
-        print(f"Error invoking SageMaker endpoint: {str(e)}")
+        logger.error(f"Error invoking SageMaker endpoint: {str(e)}")
         raise
     """打印messages的树形结构，隐藏音频数据"""
     def print_tree(obj, prefix="", is_last=True, indent="  "):
