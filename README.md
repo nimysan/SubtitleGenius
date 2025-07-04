@@ -10,7 +10,29 @@
 
 ## 系统工作流程
 
-SubtitleGenius支持多种字幕生成路径，主要工作流程如下：
+SubtitleGenius采用模块化架构，完整的字幕处理流程如下：
+
+![字幕处理流程图](subtitle_processing_flowchart.png)
+
+*完整的字幕处理流程：音频输入 → Whisper识别 → Correction纠错 → Translation翻译 → 最终字幕*
+
+### 🔄 核心处理流程
+
+**音频 → Whisper识别 → Correction纠错 → Translation翻译 → 最终字幕**
+
+1. **音频输入**：支持实时音频流和文件输入
+2. **Whisper语音识别**：使用Amazon SageMaker进行实时流式语音识别，专为阿拉伯语优化
+3. **Correction纠错服务**：新增的智能纠错模块
+   - 拼写纠正（如：اللة → الله）
+   - 语法纠正和标点符号优化
+   - 基于场景的术语标准化
+   - 上下文一致性检查
+   - 支持Amazon Bedrock LLM智能纠错
+4. **Translation翻译服务**：重构的多服务翻译模块
+   - 支持多种翻译服务（Bedrock、OpenAI、Google）
+   - 场景感知的智能翻译
+   - 统一的接口设计
+5. **最终字幕输出**：生成准确、流畅的多语言字幕
 
 ### 前端界面 → WebSocket → Whisper(SageMaker)路径
 
@@ -19,7 +41,9 @@ SubtitleGenius支持多种字幕生成路径，主要工作流程如下：
 3. **WebSocket传输**：将处理后的音频数据（WAV格式）发送到WebSocket服务器
 4. **后端处理**：WebSocket服务器保存接收到的WAV文件
 5. **AI识别**：将WAV文件提交到Whisper模型（SageMaker endpoint）进行语音识别
-6. **字幕生成**：生成的字幕实时返回给前端界面显示
+6. **字幕纠错**：使用Correction模块进行智能纠错处理
+7. **字幕翻译**：使用Translation模块进行多语言翻译
+8. **字幕生成**：生成的最终字幕实时返回给前端界面显示
 
 ### 快速启动
 
