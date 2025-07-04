@@ -175,69 +175,112 @@ async def websocket_whisper_endpoint(
         # 处理接收到的消息（可能是时间戳信息或音频数据）
         while True:
             try:
-                # 尝试接收文本消息（时间戳信息）
-                try:
-                    message = await websocket.receive_text()
-                    message_data = json.loads(message)
-                    
-                    if message_data.get('type') == 'audio_with_timestamp':
-                        # 处理时间戳信息
-                        await process_timestamp_message(client_id, message_data)
-                        pending_timestamp = message_data.get('timestamp')
-                        logger.info(f"接收到时间戳信息，等待音频数据...")
-                        continue
-                        
-                except Exception:
-                    # 如果不是JSON消息，尝试接收二进制数据
-                    pass
+                # 接收消息（可能是文本或二进制）
+                logger.debug(f"等待接收客户端 {client_id} 的消息...")
+                message = await websocket.receive()
+                logger.debug(f"收到消息类型: {message.get('type')}, 消息键: {list(message.keys())}")
                 
-                # 接收音频数据
-                data = await websocket.receive_bytes()
-                
-                # 将WAV数据转换为numpy数组
-                audio_data = await process_wav_data(data)
-                  
-                if audio_data is not None:
-                    # 添加到音频块列表
-                    audio_chunks.append(audio_data)
-                    
-                    # 创建异步生成器
-                    async def audio_generator():
-                        yield audio_data
-                    
-                    # 使用SageMaker Whisper模型处理音频
-                    if sagemaker_whisper_model and sagemaker_whisper_model.is_available():
-                        # 为当前语言更新模型配置
-                        await update_whisper_model_language(language)
+                # 检查消息类型
+                if message["type"] == "websocket.receive":
+                    if "text" in message:
+                        # 处理文本消息（时间戳信息）
+                        logger.info(f"收到文本消息，长度: {len(message['text'])}")
+                        try:
+                            message_data = json.loads(message["text"])
+                            logger.info(f"解析JSON成功，消息类型: {message_data.get('type')}")
+                            
+                            if message_data.get('type') == 'audio_with_timestamp':
+                                # 处理时间戳信息
+                                await process_timestamp_message(client_id, message_data)
+                                pending_timestamp = message_data.get('timestamp')
+                                logger.info(f"接收到时间戳信息，chunk_index: {pending_timestamp.get('chunk_index', 'unknown')}")
+                                continue
+                            else:
+                                logger.warning(f"未知的文本消息类型: {message_data.get('type')}")
+                                continue
+                                
+                        except json.JSONDecodeError as e:
+                            logger.error(f"JSON解析失败: {e}, 消息内容: {message['text'][:100]}...")
+                            continue
+                            
+                    elif "bytes" in message:
+                        # 处理二进制消息（音频数据）
+                        data = message["bytes"]
+                        logger.info(f"接收到音频数据，大小: {len(data)} bytes, 数据类型: {type(data)}")
                         
-                        async for subtitle in sagemaker_whisper_model.transcribe_stream(
-                            audio_generator(), language=language
-                        ):
-                            # 如果有待处理的时间戳，应用到字幕
-                            if pending_timestamp:
-                                subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
-                                pending_timestamp = None  # 清除已使用的时间戳
+                        # 将WAV数据转换为numpy数组
+                        try:
+                            audio_data = await process_wav_data(data)
+                            logger.info(f"音频数据处理结果: {type(audio_data) if audio_data is not None else 'None'}")
+                        except Exception as wav_error:
+                            logger.error(f"处理WAV数据失败: {wav_error}")
+                            logger.error(f"WAV数据前32字节: {data[:32] if len(data) >= 32 else data}")
+                            continue
+                          
+                        if audio_data is not None:
+                            # 添加到音频块列表
+                            audio_chunks.append(audio_data)
+                            logger.info(f"音频数据添加到chunks，当前chunks数量: {len(audio_chunks)}")
                             
-                            # 发送字幕回客户端（传递处理参数）
-                            logging.info(f"Received subtitle: {subtitle}")
-                            await send_subtitle(
-                                websocket, subtitle, client_id, 
-                                language=language,
-                                enable_correction=correction,
-                                enable_translation=translation,
-                                target_language=target_language
-                            )
+                            # 创建异步生成器
+                            async def audio_generator():
+                                yield audio_data
                             
-                    current_chunk_index += 1
+                            # 使用SageMaker Whisper模型处理音频
+                            if sagemaker_whisper_model and sagemaker_whisper_model.is_available():
+                                logger.info("开始使用SageMaker Whisper处理音频...")
+                                # 为当前语言更新模型配置
+                                await update_whisper_model_language(language)
+                                
+                                async for subtitle in sagemaker_whisper_model.transcribe_stream(
+                                    audio_generator(), language=language
+                                ):
+                                    # 如果有待处理的时间戳，应用到字幕
+                                    if pending_timestamp:
+                                        subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
+                                        logger.info(f"应用时间戳到字幕: chunk_index={pending_timestamp.get('chunk_index')}")
+                                        pending_timestamp = None  # 清除已使用的时间戳
+                                    
+                                    # 发送字幕回客户端（传递处理参数）
+                                    logging.info(f"Received subtitle: {subtitle}")
+                                    await send_subtitle(
+                                        websocket, subtitle, client_id, 
+                                        language=language,
+                                        enable_correction=correction,
+                                        enable_translation=translation,
+                                        target_language=target_language
+                                    )
+                            else:
+                                logger.warning("SageMaker Whisper模型不可用")
+                                    
+                            current_chunk_index += 1
+                        else:
+                            logger.warning("音频数据处理失败，跳过此chunk")
+                    else:
+                        logger.warning(f"未知的消息格式，消息键: {list(message.keys())}")
+                        
+                elif message["type"] == "websocket.disconnect":
+                    logger.info(f"客户端 {client_id} 断开连接")
+                    break
+                else:
+                    logger.warning(f"未知的WebSocket消息类型: {message['type']}")
                     
             except WebSocketDisconnect:
+                logger.info(f"客户端 {client_id} WebSocket连接断开")
                 break
             except Exception as e:
-                logger.error(f"处理音频数据时出错: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"处理音频数据失败: {str(e)}"
-                })
+                logger.error(f"处理消息时出错: {e}")
+                logger.error(f"错误详情: {type(e).__name__}: {str(e)}")
+                import traceback
+                logger.error(f"错误堆栈: {traceback.format_exc()}")
+                
+                try:
+                    await websocket.send_json({
+                        "type": "error",
+                        "message": f"处理消息失败: {str(e)}"
+                    })
+                except Exception as send_error:
+                    logger.error(f"发送错误消息失败: {send_error}")
                 break
             
             except Exception as e:
