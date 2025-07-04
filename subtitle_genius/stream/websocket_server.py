@@ -52,6 +52,9 @@ active_connections: Dict[str, WebSocket] = {}
 # 字幕存储 - 为每个客户端存储字幕列表
 client_subtitles: Dict[str, List[Subtitle]] = {}
 
+# 时间戳存储 - 为每个客户端存储时间戳信息
+client_timestamps: Dict[str, Dict] = {}
+
 # 音频处理器
 audio_processor = AudioProcessor()
 
@@ -166,10 +169,31 @@ async def websocket_whisper_endpoint(
         
         # 创建临时文件存储音频块
         audio_chunks: List[np.ndarray] = []
+        current_chunk_index = 0
+        pending_timestamp = None
         
-        # 处理接收到的音频数据
-        async for data in websocket.iter_bytes():
+        # 处理接收到的消息（可能是时间戳信息或音频数据）
+        while True:
             try:
+                # 尝试接收文本消息（时间戳信息）
+                try:
+                    message = await websocket.receive_text()
+                    message_data = json.loads(message)
+                    
+                    if message_data.get('type') == 'audio_with_timestamp':
+                        # 处理时间戳信息
+                        await process_timestamp_message(client_id, message_data)
+                        pending_timestamp = message_data.get('timestamp')
+                        logger.info(f"接收到时间戳信息，等待音频数据...")
+                        continue
+                        
+                except Exception:
+                    # 如果不是JSON消息，尝试接收二进制数据
+                    pass
+                
+                # 接收音频数据
+                data = await websocket.receive_bytes()
+                
                 # 将WAV数据转换为numpy数组
                 audio_data = await process_wav_data(data)
                   
@@ -189,6 +213,11 @@ async def websocket_whisper_endpoint(
                         async for subtitle in sagemaker_whisper_model.transcribe_stream(
                             audio_generator(), language=language
                         ):
+                            # 如果有待处理的时间戳，应用到字幕
+                            if pending_timestamp:
+                                subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
+                                pending_timestamp = None  # 清除已使用的时间戳
+                            
                             # 发送字幕回客户端（传递处理参数）
                             logging.info(f"Received subtitle: {subtitle}")
                             await send_subtitle(
@@ -198,6 +227,18 @@ async def websocket_whisper_endpoint(
                                 enable_translation=translation,
                                 target_language=target_language
                             )
+                            
+                    current_chunk_index += 1
+                    
+            except WebSocketDisconnect:
+                break
+            except Exception as e:
+                logger.error(f"处理音频数据时出错: {e}")
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"处理音频数据失败: {str(e)}"
+                })
+                break
             
             except Exception as e:
                 logger.error(f"处理音频数据失败: {e}")
@@ -327,6 +368,60 @@ async def websocket_transcribe_endpoint(
         # 清理字幕数据
         if client_id in client_subtitles:
             del client_subtitles[client_id]
+
+
+async def process_timestamp_message(client_id: str, message_data: dict):
+    """处理时间戳消息"""
+    try:
+        timestamp_info = message_data.get('timestamp', {})
+        
+        # 存储时间戳信息
+        if client_id not in client_timestamps:
+            client_timestamps[client_id] = {}
+        
+        chunk_index = timestamp_info.get('chunk_index', 0)
+        client_timestamps[client_id][chunk_index] = {
+            'start_time': timestamp_info.get('start_time', 0.0),
+            'end_time': timestamp_info.get('end_time', 0.0),
+            'duration': timestamp_info.get('duration', 0.0),
+            'chunk_index': chunk_index,
+            'total_samples_processed': timestamp_info.get('total_samples_processed', 0),
+            'audio_start_time': timestamp_info.get('audio_start_time', 0.0),
+            'processing_start_time': timestamp_info.get('processing_start_time', 0.0),
+            'current_time': timestamp_info.get('current_time', 0.0),
+            'received_at': datetime.datetime.now().isoformat()
+        }
+        
+        logger.info(f"客户端 {client_id} 时间戳信息已存储:")
+        logger.info(f"  - Chunk {chunk_index}: {timestamp_info.get('start_time', 0.0):.2f}s - {timestamp_info.get('end_time', 0.0):.2f}s")
+        
+        return True
+    except Exception as e:
+        logger.error(f"处理时间戳消息失败: {e}")
+        return False
+
+
+async def get_chunk_timestamp(client_id: str, chunk_index: int) -> Optional[Dict]:
+    """获取指定chunk的时间戳信息"""
+    if client_id in client_timestamps and chunk_index in client_timestamps[client_id]:
+        return client_timestamps[client_id][chunk_index]
+    return None
+
+
+async def apply_timestamp_to_subtitle(subtitle: Subtitle, timestamp_info: Dict) -> Subtitle:
+    """将时间戳信息应用到字幕对象"""
+    if timestamp_info:
+        # 使用前端提供的绝对时间戳
+        subtitle.start = timestamp_info['start_time']
+        subtitle.end = timestamp_info['end_time']
+        
+        # 如果字幕有相对时间戳，需要进行映射
+        # 这里假设Whisper返回的是chunk内的相对时间戳
+        # 实际实现可能需要更复杂的时间戳映射逻辑
+        
+        logger.info(f"应用时间戳到字幕: {subtitle.start:.2f}s - {subtitle.end:.2f}s")
+    
+    return subtitle
 
 
 async def update_whisper_model_language(language: str):

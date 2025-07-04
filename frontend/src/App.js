@@ -61,21 +61,30 @@ function App() {
       // 获取采样率信息，优先使用音频处理器提供的信息
       const sampleRate = audioInfo.targetSampleRate || audioInfo.originalSampleRate || 16000;
       
+      // 获取时间戳信息
+      const timestamp = audioInfo.timestamp || {};
+      
       console.log('音频转换信息:', {
         originalSampleRate: audioInfo.originalSampleRate,
         targetSampleRate: audioInfo.targetSampleRate,
         usingSampleRate: sampleRate,
         audioDataLength: audioData.length,
-        duration: audioInfo.duration
+        duration: audioInfo.duration,
+        timestamp: {
+          start_time: timestamp.start_time,
+          end_time: timestamp.end_time,
+          chunk_index: timestamp.chunk_index,
+          duration: timestamp.duration
+        }
       });
       
       // 将音频数据转换为WAV格式（现在是异步的）
       const wavBlob = await convertToWAV(audioData, sampleRate);
       
-      // 通过WebSocket发送音频数据
+      // 通过WebSocket发送音频数据，包含时间戳信息
       if (socket) {
-        console.log('发送音频数据，大小:', audioData.length, '采样率:', sampleRate);
-        sendAudioData(socket, wavBlob, debugMode); // 第三个参数表示是否保存到文件
+        console.log('发送音频数据，大小:', audioData.length, '采样率:', sampleRate, '时间戳:', timestamp);
+        sendAudioData(socket, wavBlob, debugMode, timestamp); // 添加时间戳参数
       }
     } catch (error) {
       console.error('处理音频数据失败:', error);

@@ -187,27 +187,60 @@ export const createWebSocketConnection = (url, onMessage, onOpen, onClose, onErr
  * @param {WebSocket} socket - WebSocket实例
  * @param {Blob|ArrayBuffer} audioData - 音频数据
  * @param {boolean} saveToFile - 是否保存到文件
+ * @param {Object} timestamp - 时间戳信息
  * @returns {boolean} - 是否发送成功
  */
-export const sendAudioData = (socket, audioData, saveToFile = false) => {
+export const sendAudioData = (socket, audioData, saveToFile = false, timestamp = null) => {
   if (socket && socket.readyState === WebSocket.OPEN) {
-    socket.send(audioData);
+    // 如果有时间戳信息，需要发送结构化数据
+    if (timestamp) {
+      // 创建包含时间戳的消息
+      const message = {
+        type: 'audio_with_timestamp',
+        timestamp: {
+          start_time: timestamp.start_time,
+          end_time: timestamp.end_time,
+          duration: timestamp.duration,
+          chunk_index: timestamp.chunk_index,
+          total_samples_processed: timestamp.total_samples_processed,
+          audio_start_time: timestamp.audio_start_time,
+          processing_start_time: timestamp.processing_start_time,
+          current_time: timestamp.current_time
+        }
+      };
+      
+      // 先发送时间戳信息
+      socket.send(JSON.stringify(message));
+      
+      // 然后发送音频数据
+      socket.send(audioData);
+      
+      console.log('发送音频数据和时间戳:', {
+        chunk_index: timestamp.chunk_index,
+        start_time: timestamp.start_time,
+        end_time: timestamp.end_time,
+        duration: timestamp.duration
+      });
+    } else {
+      // 兼容旧版本，直接发送音频数据
+      socket.send(audioData);
+    }
     
     // 如果需要保存到文件
     if (saveToFile && audioData instanceof Blob) {
-      const timestamp = new Date().getTime();
+      const chunkIndex = timestamp?.chunk_index || new Date().getTime();
       const url = URL.createObjectURL(audioData);
       const a = document.createElement('a');
       a.style.display = 'none';
       a.href = url;
-      a.download = `audio_chunk_${timestamp}.wav`;
+      a.download = `audio_chunk_${chunkIndex}.wav`;
       document.body.appendChild(a);
       a.click();
       setTimeout(() => {
         document.body.removeChild(a);
         URL.revokeObjectURL(url);
       }, 100);
-      console.log(`已保存音频文件: audio_chunk_${timestamp}.wav`);
+      console.log(`已保存音频文件: audio_chunk_${chunkIndex}.wav`);
     }
     
     return true;
