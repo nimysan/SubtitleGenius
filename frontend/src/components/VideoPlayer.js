@@ -75,20 +75,37 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
             // 设置消息处理
             processorNodeRef.current.port.onmessage = (event) => {
               if (onAudioData && event.data.audioData) {
-                const { audioData, originalSampleRate, targetSampleRate, duration, originalLength, processedLength } = event.data;
+                const { 
+                  audioData, 
+                  originalSampleRate, 
+                  targetSampleRate, 
+                  duration, 
+                  originalLength, 
+                  processedLength,
+                  timestamp  // 添加时间戳提取
+                } = event.data;
+                
                 console.log(`AudioWorklet发送音频数据:`, {
                   originalSampleRate,
                   targetSampleRate,
                   duration,
                   originalLength,
-                  processedLength
+                  processedLength,
+                  timestamp: timestamp ? {
+                    chunk_index: timestamp.chunk_index,
+                    start_time: timestamp.start_time,
+                    end_time: timestamp.end_time,
+                    duration: timestamp.duration
+                  } : 'undefined'
                 });
+                
                 onAudioData(audioData, {
                   originalSampleRate,
                   targetSampleRate,
                   duration,
                   originalLength,
-                  processedLength
+                  processedLength,
+                  timestamp  // 传递时间戳信息
                 });
               }
             };
@@ -125,6 +142,11 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
         1  // 单声道输出
       );
       
+      // 时间戳跟踪变量（用于ScriptProcessor降级方案）
+      let totalSamplesProcessed = 0;
+      let chunkIndex = 0;
+      let audioStartTime = null;
+      
       // 设置音频处理回调
       processorNodeRef.current.onaudioprocess = (audioProcessingEvent) => {
         const inputBuffer = audioProcessingEvent.inputBuffer;
@@ -134,17 +156,48 @@ const VideoPlayer = forwardRef(({ videoFile, onTimeUpdate, onAudioData }, ref) =
         const audioData = new Float32Array(inputData.length);
         audioData.set(inputData);
         
+        // 计算时间戳信息
+        if (audioStartTime === null) {
+          audioStartTime = audioContextRef.current.currentTime;
+        }
+        
+        const sampleRate = audioContextRef.current.sampleRate;
+        const chunkStartSample = totalSamplesProcessed;
+        const chunkEndSample = totalSamplesProcessed + audioData.length;
+        
+        const chunkStartTime = chunkStartSample / sampleRate;
+        const chunkEndTime = chunkEndSample / sampleRate;
+        const chunkDuration = audioData.length / sampleRate;
+        
+        totalSamplesProcessed += audioData.length;
+        
         // 发送音频数据
         if (onAudioData) {
-          const sampleRate = audioContextRef.current.sampleRate;
-          console.log(`ScriptProcessor发送音频数据，样本数: ${audioData.length}，时长: ${audioData.length/sampleRate}秒`);
+          console.log(`ScriptProcessor发送音频数据 (Chunk ${chunkIndex}):`, {
+            样本数: audioData.length,
+            时长: chunkDuration.toFixed(2) + 's',
+            时间范围: `${chunkStartTime.toFixed(2)}s - ${chunkEndTime.toFixed(2)}s`
+          });
+          
           onAudioData(audioData, {
             originalSampleRate: sampleRate,
             targetSampleRate: 16000, // 目标采样率
-            duration: audioData.length / sampleRate,
+            duration: chunkDuration,
             originalLength: audioData.length,
-            processedLength: audioData.length // ScriptProcessor不做重采样
+            processedLength: audioData.length, // ScriptProcessor不做重采样
+            timestamp: {
+              start_time: chunkStartTime,
+              end_time: chunkEndTime,
+              duration: chunkDuration,
+              chunk_index: chunkIndex,
+              total_samples_processed: totalSamplesProcessed,
+              audio_start_time: audioStartTime,
+              processing_start_time: audioContextRef.current.currentTime,
+              current_time: audioContextRef.current.currentTime
+            }
           });
+          
+          chunkIndex++;
         }
       };
       

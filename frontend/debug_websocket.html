@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket调试测试</title>
+</head>
+<body>
+    <h1>WebSocket消息格式调试</h1>
+    <div>
+        <button id="connectBtn">连接调试服务器</button>
+        <button id="sendTimestampBtn" disabled>发送时间戳消息</button>
+        <button id="sendAudioBtn" disabled>发送音频数据</button>
+        <button id="disconnectBtn" disabled>断开连接</button>
+    </div>
+    <div>
+        <h3>日志:</h3>
+        <div id="log" style="height: 400px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; font-family: monospace;"></div>
+    </div>
+
+    <script>
+        let socket = null;
+        const log = document.getElementById('log');
+        
+        function addLog(message) {
+            const timestamp = new Date().toLocaleTimeString();
+            log.innerHTML += `[${timestamp}] ${message}<br>`;
+            log.scrollTop = log.scrollHeight;
+        }
+        
+        // 创建测试音频数据（简单的WAV文件）
+        function createTestWAVData() {
+            const sampleRate = 16000;
+            const duration = 3; // 3秒
+            const numSamples = sampleRate * duration;
+            
+            // WAV文件头
+            const header = new ArrayBuffer(44);
+            const view = new DataView(header);
+            
+            // RIFF header
+            view.setUint32(0, 0x46464952, false); // "RIFF"
+            view.setUint32(4, 36 + numSamples * 2, true); // file size
+            view.setUint32(8, 0x45564157, false); // "WAVE"
+            
+            // fmt chunk
+            view.setUint32(12, 0x20746d66, false); // "fmt "
+            view.setUint32(16, 16, true); // chunk size
+            view.setUint16(20, 1, true); // audio format (PCM)
+            view.setUint16(22, 1, true); // num channels
+            view.setUint32(24, sampleRate, true); // sample rate
+            view.setUint32(28, sampleRate * 2, true); // byte rate
+            view.setUint16(32, 2, true); // block align
+            view.setUint16(34, 16, true); // bits per sample
+            
+            // data chunk
+            view.setUint32(36, 0x61746164, false); // "data"
+            view.setUint32(40, numSamples * 2, true); // data size
+            
+            // 创建音频数据（静音）
+            const audioData = new ArrayBuffer(numSamples * 2);
+            const audioView = new Int16Array(audioData);
+            for (let i = 0; i < numSamples; i++) {
+                audioView[i] = 0; // 静音
+            }
+            
+            // 合并头部和数据
+            const wavData = new Uint8Array(header.byteLength + audioData.byteLength);
+            wavData.set(new Uint8Array(header), 0);
+            wavData.set(new Uint8Array(audioData), header.byteLength);
+            
+            return wavData.buffer;
+        }
+        
+        document.getElementById('connectBtn').onclick = function() {
+            if (socket) {
+                addLog('已经连接到服务器');
+                return;
+            }
+            
+            addLog('正在连接到调试服务器...');
+            socket = new WebSocket('ws://localhost:8001/ws/debug');
+            
+            socket.onopen = function() {
+                addLog('✅ WebSocket连接已建立');
+                document.getElementById('connectBtn').disabled = true;
+                document.getElementById('sendTimestampBtn').disabled = false;
+                document.getElementById('sendAudioBtn').disabled = false;
+                document.getElementById('disconnectBtn').disabled = false;
+            };
+            
+            socket.onmessage = function(event) {
+                addLog(`📨 收到服务器消息: ${event.data}`);
+            };
+            
+            socket.onclose = function() {
+                addLog('❌ WebSocket连接已关闭');
+                socket = null;
+                document.getElementById('connectBtn').disabled = false;
+                document.getElementById('sendTimestampBtn').disabled = true;
+                document.getElementById('sendAudioBtn').disabled = true;
+                document.getElementById('disconnectBtn').disabled = true;
+            };
+            
+            socket.onerror = function(error) {
+                addLog(`❌ WebSocket错误: ${error}`);
+            };
+        };
+        
+        document.getElementById('sendTimestampBtn').onclick = function() {
+            if (!socket) {
+                addLog('❌ 未连接到服务器');
+                return;
+            }
+            
+            const timestampMessage = {
+                type: 'audio_with_timestamp',
+                timestamp: {
+                    start_time: 6.0,
+                    end_time: 9.0,
+                    duration: 3.0,
+                    chunk_index: 2,
+                    total_samples_processed: 48000,
+                    audio_start_time: performance.now(),
+                    processing_start_time: performance.now(),
+                    current_time: performance.now()
+                }
+            };
+            
+            addLog('📤 发送时间戳消息...');
+            socket.send(JSON.stringify(timestampMessage));
+        };
+        
+        document.getElementById('sendAudioBtn').onclick = function() {
+            if (!socket) {
+                addLog('❌ 未连接到服务器');
+                return;
+            }
+            
+            const wavData = createTestWAVData();
+            addLog(`📤 发送音频数据，大小: ${wavData.byteLength} bytes`);
+            socket.send(wavData);
+        };
+        
+        document.getElementById('disconnectBtn').onclick = function() {
+            if (socket) {
+                socket.close();
+            }
+        };
+    </script>
+</body>
+</html>
