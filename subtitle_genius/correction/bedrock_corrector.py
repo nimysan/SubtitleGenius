@@ -38,13 +38,12 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             # 构建纠错提示词
             prompt = self._build_correction_prompt(input_data)
             
-            # 构建消息序列
+            # 构建消息序列 - 修正格式
             messages = [
                 {
                     "role": "user",
                     "content": [
                         {
-                            "type": "text",
                             "text": prompt
                         }
                     ]
