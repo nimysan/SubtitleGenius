@@ -1,5 +1,5 @@
 """
-基于Amazon Bedrock的字幕纠错服务实现
+基于Amazon Bedrock的多语言字幕纠错服务实现
 """
 
 import json
@@ -11,7 +11,7 @@ from .base import SubtitleCorrectionService, CorrectionInput, CorrectionOutput
 
 
 class BedrockCorrectionService(SubtitleCorrectionService):
-    """基于Amazon Bedrock的字幕纠错服务"""
+    """基于Amazon Bedrock的多语言字幕纠错服务"""
     
     def __init__(self, model_id: str = "us.anthropic.claude-3-haiku-20240307-v1:0"):
         self.model_id = model_id
@@ -26,6 +26,46 @@ class BedrockCorrectionService(SubtitleCorrectionService):
         except Exception as e:
             print(f"警告: 无法初始化Bedrock客户端: {e}")
             self.bedrock_runtime = None
+    
+    # 语言配置映射
+    LANGUAGE_CONFIGS = {
+        "ar": {
+            "name": "阿拉伯语",
+            "assistant_role": "你是一个专业的阿拉伯语字幕纠错助手",
+            "common_fixes": {
+                "اللة": "الله",
+                "انشاء الله": "إن شاء الله",
+                "مع السلامة": "مع السلامة"
+            }
+        },
+        "zh": {
+            "name": "中文",
+            "assistant_role": "你是一个专业的中文字幕纠错助手",
+            "common_fixes": {
+                "的的": "的",
+                "了了": "了",
+                "。。": "。"
+            }
+        },
+        "en": {
+            "name": "英语",
+            "assistant_role": "You are a professional English subtitle correction assistant",
+            "common_fixes": {
+                "  ": " ",  # 多余空格
+                "..": ".",   # 重复句号
+                "??": "?"    # 重复问号
+            }
+        },
+        "es": {
+            "name": "西班牙语",
+            "assistant_role": "Eres un asistente profesional de corrección de subtítulos en español",
+            "common_fixes": {
+                "  ": " ",
+                "..": ".",
+                "??": "?"
+            }
+        }
+    }
     
     async def correct(self, input_data: CorrectionInput) -> CorrectionOutput:
         """使用Bedrock Claude进行字幕纠错"""
@@ -68,7 +108,11 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             return await self._mock_correction(input_data)
     
     def _build_correction_prompt(self, input_data: CorrectionInput) -> str:
-        """构建纠错提示词"""
+        """构建多语言纠错提示词"""
+        
+        # 获取语言配置
+        lang_config = self.LANGUAGE_CONFIGS.get(input_data.language, self.LANGUAGE_CONFIGS["ar"])
+        language_name = lang_config["name"]
         
         # 构建历史上下文
         history_context = ""
@@ -77,9 +121,9 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             history_context = f"\n\n历史字幕上下文:\n" + "\n".join(f"- {h}" for h in recent_history)
         
         # 场景相关的纠错指导
-        scene_guidance = self._get_scene_guidance(input_data.scene_description)
+        scene_guidance = self._get_scene_guidance(input_data.scene_description, input_data.language)
         
-        prompt = f"""你是一个专业的阿拉伯语字幕纠错助手。请纠正以下字幕中的错误。
+        prompt = f"""{lang_config["assistant_role"]}。请纠正以下{language_name}字幕中的错误。
 
 场景: {input_data.scene_description}
 当前字幕: {input_data.current_subtitle}{history_context}
@@ -87,7 +131,7 @@ class BedrockCorrectionService(SubtitleCorrectionService):
 {scene_guidance}
 
 请检查并纠正以下类型的错误:
-1. 拼写错误 (如: اللة -> الله)
+1. 拼写错误
 2. 语法错误
 3. 标点符号错误 (去除多余空格、重复标点等)
 4. 术语标准化 (根据场景使用标准术语)
@@ -105,28 +149,69 @@ class BedrockCorrectionService(SubtitleCorrectionService):
         
         return prompt
     
-    def _get_scene_guidance(self, scene_description: str) -> str:
-        """根据场景获取纠错指导"""
+    def _get_scene_guidance(self, scene_description: str, language: str = "ar") -> str:
+        """根据场景和语言获取纠错指导"""
+        
+        # 多语言场景指导
         scene_guides = {
-            "足球比赛": """
+            "ar": {
+                "足球比赛": """
 足球场景术语指导:
 - 使用标准足球术语: كرة القدم (足球), هدف (进球), لاعب (球员), مباراة (比赛)
 - 保持球队称呼一致性: الفريق الأول, الفريق الثاني
 - 注意比分和时间表达的准确性""",
-            
-            "新闻播报": """
+                
+                "新闻播报": """
 新闻场景术语指导:
 - 使用正式的政治术语: رئيس (总统), حكومة (政府), وزير (部长)
 - 保持人名、地名的一致性
 - 使用标准的新闻用语""",
-            
-            "商业新闻": """
+                
+                "商业新闻": """
 商业场景术语指导:
 - 使用标准商业术语: شركة (公司), اقتصاد (经济), سوق (市场)
 - 保持公司名称、品牌名称的一致性"""
+            },
+            "zh": {
+                "足球比赛": """
+足球场景术语指导:
+- 使用标准足球术语: 足球、进球、球员、比赛、射门、传球
+- 保持球队称呼一致性: 主队、客队，或具体队名
+- 注意比分和时间表达的准确性""",
+                
+                "新闻播报": """
+新闻场景术语指导:
+- 使用正式的政治术语: 总统、政府、部长、国务院
+- 保持人名、地名的一致性
+- 使用标准的新闻用语""",
+                
+                "商业新闻": """
+商业场景术语指导:
+- 使用标准商业术语: 公司、经济、市场、股票、投资
+- 保持公司名称、品牌名称的一致性"""
+            },
+            "en": {
+                "足球比赛": """
+Football scene terminology guidance:
+- Use standard football terms: football, goal, player, match, shot, pass
+- Maintain team name consistency: home team, away team, or specific team names
+- Pay attention to score and time expressions""",
+                
+                "新闻播报": """
+News scene terminology guidance:
+- Use formal political terms: president, government, minister, administration
+- Maintain consistency in person names and place names
+- Use standard news language""",
+                
+                "商业新闻": """
+Business scene terminology guidance:
+- Use standard business terms: company, economy, market, stock, investment
+- Maintain consistency in company names and brand names"""
+            }
         }
         
-        return scene_guides.get(scene_description, "请根据上下文进行适当的纠错。")
+        lang_guides = scene_guides.get(language, scene_guides["ar"])
+        return lang_guides.get(scene_description, "请根据上下文进行适当的纠错。")
     
     async def _call_bedrock_converse(self, messages: list) -> dict:
         """调用Bedrock Converse API"""
@@ -188,29 +273,28 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             }
     
     async def _mock_correction(self, input_data: CorrectionInput) -> CorrectionOutput:
-        """模拟纠错（备用方案）"""
+        """多语言模拟纠错（备用方案）"""
         
         original = input_data.current_subtitle.strip()
         corrected = original
         has_correction = False
         details = []
         
-        # 基本的拼写纠正
-        basic_fixes = {
-            "اللة": "الله",
-            "انشاء الله": "إن شاء الله",
-            "مع السلامة": "مع السلامة"
-        }
+        # 获取语言特定的基本纠错规则
+        lang_config = self.LANGUAGE_CONFIGS.get(input_data.language, self.LANGUAGE_CONFIGS["ar"])
+        basic_fixes = lang_config["common_fixes"]
         
+        # 应用基本纠错规则
         for wrong, right in basic_fixes.items():
             if wrong in corrected:
                 corrected = corrected.replace(wrong, right)
                 has_correction = True
                 details.append(f"拼写纠正: {wrong} -> {right}")
         
-        # 标点符号纠正
+        # 通用标点符号纠正
         import re
-        new_text = re.sub(r'\s+([.!?])', r'\1', corrected)
+        new_text = re.sub(r'\s+([.!?])', r'\1', corrected)  # 移除标点前的空格
+        new_text = re.sub(r'\s+', ' ', new_text)  # 合并多个空格
         if new_text != corrected:
             corrected = new_text
             has_correction = True
@@ -223,7 +307,7 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             corrected_subtitle=corrected,
             has_correction=has_correction,
             confidence=0.9 if has_correction else 1.0,
-            correction_details="; ".join(details) if details else "模拟Bedrock纠错"
+            correction_details="; ".join(details) if details else f"模拟{lang_config['name']}纠错"
         )
     
     def get_service_name(self) -> str:
