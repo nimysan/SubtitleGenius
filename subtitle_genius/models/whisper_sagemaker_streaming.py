@@ -8,7 +8,7 @@ import numpy as np
 import io
 import wave
 import time
-from typing import AsyncGenerator, Optional, List, Dict, Any
+from typing import AsyncGenerator, Optional, List, Dict, Any, Tuple
 from concurrent.futures import ThreadPoolExecutor
 import logging
 from dataclasses import dataclass
@@ -21,6 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from sagemaker_whisper import WhisperSageMakerClient, chunk_audio
 
 from ..subtitle.models import Subtitle
+from ..audio.vad_processor import SileroVADProcessor, VADConfig
 
 logger = logging.getLogger(__name__)
 
@@ -35,6 +36,15 @@ class WhisperSageMakerStreamConfig:
     voice_threshold: float = 0.01    # 语音活动检测阈值
     max_buffer_size: int = 10        # 最大缓冲区大小
     sagemaker_chunk_duration: int = 30  # SageMaker 处理的块大小(秒)
+    
+    # VAD相关配置
+    use_vad: bool = True            # 是否使用VAD
+    vad_threshold: float = 0.5      # VAD置信度阈值
+    vad_min_speech_duration_ms: int = 250  # 最小语音持续时间(毫秒)
+    vad_min_silence_duration_ms: int = 100  # 最小静音持续时间(毫秒)
+    vad_window_size_samples: int = 1536  # VAD窗口大小
+    vad_speech_pad_ms: int = 30     # 语音片段前后填充(毫秒)
+    vad_max_merge_gap_ms: int = 500  # 最大合并间隔(毫秒)
 
 
 class WhisperSageMakerStreamBuffer:
@@ -134,63 +144,96 @@ class WhisperSageMakerStreamingModel:
         # 线程池用于异步处理
         self.executor = ThreadPoolExecutor(max_workers=2)
         
+    async def transcribe_audio(self, audio_data: np.ndarray, language: str = "zh") -> str:
+        """
+        转录单个音频片段
+        
+        参数:
+            audio_data: 音频数据，numpy数组
+            language: 语言代码
+            
+        返回:
+            转录文本
+        """
+        try:
+            # 确保音频数据是float32格式
+            if audio_data.dtype != np.float32:
+                audio_data = audio_data.astype(np.float32)
+            
+            # 转换为WAV格式
+            # 转换为16-bit PCM
+            audio_int16 = (audio_data * 32767).astype(np.int16)
+            
+            # 创建WAV文件
+            wav_buffer = io.BytesIO()
+            with wave.open(wav_buffer, 'wb') as wav_file:
+                wav_file.setnchannels(1)  # 单声道
+                wav_file.setsampwidth(2)  # 16-bit
+                wav_file.setframerate(self.config.sample_rate)
+                wav_file.writeframes(audio_int16.tobytes())
+            
+            wav_data = wav_buffer.getvalue()
+            
+            # 异步转录
+            result = await self._async_transcribe(wav_data, language)
+            
+            if result and result.get('transcription'):
+                return result.get('transcription', '').strip()
+            else:
+                return ""
+                
+        except Exception as e:
+            logger.error(f"转录音频失败: {e}")
+            return ""
+    
     async def transcribe_stream(self, 
                               audio_stream: AsyncGenerator[np.ndarray, None],
                               language: str = "ar") -> AsyncGenerator[Subtitle, None]:
         """流式转录音频"""
-        buffer = WhisperSageMakerStreamBuffer(self.config)
-        
         logger.info(f"Starting SageMaker Whisper streaming transcription for language: {language}")
         
         try:
+            # 直接处理传入的音频流
+            # 这里假设音频流已经经过VAD处理，每个块都是一个语音片段
             async for audio_chunk in audio_stream:
-                # 添加音频到缓冲区
-                buffer.add_chunk(audio_chunk)
+                # 确保音频数据是float32格式
+                if audio_chunk.dtype != np.float32:
+                    audio_chunk = audio_chunk.astype(np.float32)
                 
-                # 当缓冲区准备好时处理
-                # ready_for_processing 的计算就是 duration*sample rate的
-                while buffer.ready_for_processing(): 
-                    wav_data = buffer.get_processing_chunk()
+                # 转换为WAV格式
+                # 转换为16-bit PCM
+                audio_int16 = (audio_chunk * 32767).astype(np.int16)
+                
+                # 创建WAV文件
+                wav_buffer = io.BytesIO()
+                with wave.open(wav_buffer, 'wb') as wav_file:
+                    wav_file.setnchannels(1)  # 单声道
+                    wav_file.setsampwidth(2)  # 16-bit
+                    wav_file.setframerate(self.config.sample_rate)
+                    wav_file.writeframes(audio_int16.tobytes())
+                
+                wav_data = wav_buffer.getvalue()
+                
+                # 异步转录
+                result = await self._async_transcribe(wav_data, language)
+                
+                if result and result.get('transcription'):
+                    text = result.get('transcription', '').strip()
                     
-                    if wav_data is None:
-                        break
-                    
-                    # 检测语音活动
-                    audio_array = np.array(list(buffer.buffer)[:buffer.chunk_size], dtype=np.float32)
-                    if not buffer.is_voice_active(audio_array):
-                        buffer.advance()
-                        continue
-                    
-                    # 异步转录
-                    result = await self._async_transcribe(wav_data, language)
-                    
-                    if result and result.get('transcription'):
-                        # 过滤重叠内容
-                        new_text = self._filter_overlap(result, buffer.last_result)
+                    if text:
+                        # 创建字幕对象（时间戳将在外部设置）
+                        subtitle = Subtitle(
+                            start=0,  # 将在外部设置
+                            end=0,    # 将在外部设置
+                            text=text
+                        )
                         
-                        if new_text.strip():
-                            subtitle = Subtitle(
-                                start=buffer.get_current_time(),
-                                end=buffer.get_current_time() + self.config.chunk_duration,
-                                text=new_text.strip()
-                            )
-                            
-                            logger.debug(f"Generated subtitle: {subtitle}")
-                            yield subtitle
-                        
-                        buffer.last_result = result
-                    
-                    buffer.advance()
+                        logger.debug(f"生成字幕: {subtitle}")
+                        yield subtitle
                     
         except Exception as e:
             logger.error(f"Error in SageMaker Whisper streaming: {e}")
             raise
-        finally:
-            # 处理剩余缓冲区内容并获取最终字幕
-            # TODO 当一些数据不匹配的时候，就会有剩余的缓冲区出来 这里需要详细理解一下
-            final_subtitle = await self._process_remaining_buffer(buffer, language)
-            if final_subtitle:
-                yield final_subtitle  # 如果有最终字幕，发送出去
             
     async def _async_transcribe(self, wav_data: bytes, language: str) -> Dict[str, Any]:
         """异步转录音频数据"""
@@ -303,24 +346,75 @@ class WhisperSageMakerStreamingModel:
         
     async def _process_remaining_buffer(self, buffer: WhisperSageMakerStreamBuffer, language: str) -> Optional[Subtitle]:
         """处理剩余缓冲区内容，返回生成的字幕（如果有）"""
-        if len(buffer.buffer) > 0:
-            remaining_audio = np.array(list(buffer.buffer), dtype=np.float32)
+        if len(buffer.buffer) <= 0:
+            return None
             
-            if buffer.is_voice_active(remaining_audio):
-                wav_data = buffer._convert_to_wav(remaining_audio)
-                result = await self._async_transcribe(wav_data, language)
+        remaining_audio = np.array(list(buffer.buffer), dtype=np.float32)
+        
+        # 使用VAD处理剩余音频
+        if self.config.use_vad:
+            vad_config = VADConfig(
+                sample_rate=self.config.sample_rate,
+                threshold=self.config.vad_threshold,
+                min_speech_duration_ms=self.config.vad_min_speech_duration_ms,
+                min_silence_duration_ms=self.config.vad_min_silence_duration_ms,
+                window_size_samples=self.config.vad_window_size_samples,
+                speech_pad_ms=self.config.vad_speech_pad_ms
+            )
+            vad_processor = SileroVADProcessor(vad_config)
+            
+            if vad_processor.is_available():
+                speech_segments, speech_timestamps = vad_processor.extract_speech_segments(remaining_audio)
                 
-                if result and result.get('transcription'):
-                    new_text = self._filter_overlap(result, buffer.last_result)
+                # 如果检测到语音片段
+                if speech_segments:
+                    # 处理最后一个语音片段
+                    segment = speech_segments[-1]
+                    timestamp = speech_timestamps[-1]
                     
-                    if new_text.strip():
-                        subtitle = Subtitle(
-                            start=buffer.get_current_time(),
-                            end=buffer.get_current_time() + 3, # TODO here need to 
-                            text=new_text.strip()
-                        )
-                        logger.info(f"Final subtitle: {subtitle}")
-                        return subtitle  # 返回生成的字幕
+                    # 计算片段时间
+                    segment_start = buffer.get_current_time() + timestamp['start'] / self.config.sample_rate
+                    segment_end = buffer.get_current_time() + timestamp['end'] / self.config.sample_rate
+                    
+                    # 转换为WAV格式
+                    wav_data = buffer._convert_to_wav(segment)
+                    
+                    # 异步转录
+                    result = await self._async_transcribe(wav_data, language)
+                    
+                    if result and result.get('transcription'):
+                        new_text = self._filter_overlap(result, buffer.last_result)
+                        
+                        if new_text.strip():
+                            subtitle = Subtitle(
+                                start=segment_start,
+                                end=segment_end,
+                                text=new_text.strip()
+                            )
+                            logger.info(f"最终字幕: {subtitle}")
+                            return subtitle
+                return None
+        
+        # 如果VAD不可用或未启用，使用原有的处理逻辑
+        if buffer.is_voice_active(remaining_audio):
+            wav_data = buffer._convert_to_wav(remaining_audio)
+            result = await self._async_transcribe(wav_data, language)
+            
+            if result and result.get('transcription'):
+                new_text = self._filter_overlap(result, buffer.last_result)
+                
+                if new_text.strip():
+                    # 计算实际的结束时间
+                    end_time = buffer.get_current_time() + len(remaining_audio) / self.config.sample_rate
+                    
+                    subtitle = Subtitle(
+                        start=buffer.get_current_time(),
+                        end=end_time,
+                        text=new_text.strip()
+                    )
+                    logger.info(f"最终字幕: {subtitle}")
+                    return subtitle
+        
         return None  # 如果没有生成字幕，返回None
                         
     def __del__(self):
