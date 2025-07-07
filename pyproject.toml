@@ -63,6 +63,7 @@ dependencies = [
     "debugpy>=1.8.14",
     "matplotlib>=3.10.3",
     "silero-vad>=5.1.2",
+    "faster-whisper>=1.1.1",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

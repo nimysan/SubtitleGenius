@@ -1,3 +1,6 @@
 [submodule "amazon-transcribe-streaming-sdk"]
 	path = amazon-transcribe-streaming-sdk
 	url = https://github.com/awslabs/amazon-transcribe-streaming-sdk.git
+[submodule "whisper_streaming"]
+	path = whisper_streaming
+	url = https://github.com/ufal/whisper_streaming.git

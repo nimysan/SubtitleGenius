@@ -28,16 +28,11 @@ class VADConfig:
     speech_pad_ms: int = 30         # 语音片段前后填充(毫秒)
 
 
-class SileroVADProcessor:
-    """Silero VAD处理器"""
+class StreamingVADProcessor:
+    """使用VADIterator处理流式音频"""
     
     def __init__(self, config: Optional[VADConfig] = None):
-        """
-        初始化Silero VAD处理器
-        
-        参数:
-            config: VAD配置，如果为None则使用默认配置
-        """
+        """初始化流式VAD处理器"""
         self.config = config or VADConfig()
         self.sample_rate = self.config.sample_rate
         
@@ -58,10 +53,17 @@ class SileroVADProcessor:
             (self.get_speech_timestamps, self.save_audio, self.read_audio, 
              self.VADIterator, self.collect_chunks) = self.utils
             
+            # 创建VADIterator实例
+            self.vad_iterator = self.VADIterator(
+                model=self.model,
+                threshold=self.config.threshold,
+                sampling_rate=self.sample_rate,
+                min_silence_duration_ms=self.config.min_silence_duration_ms,
+                speech_pad_ms=self.config.speech_pad_ms
+            )
+            
             self._model_loaded = True
             logger.info(f"Silero VAD模型加载成功，使用设备: {self.device}")
-            
-            logger.info(f"Silero VAD初始化成功，使用设备: {self.device}")
             
         except Exception as e:
             logger.error(f"Silero VAD初始化失败: {e}")
@@ -70,353 +72,242 @@ class SileroVADProcessor:
             logger.error("2. 运行: import torch; torch.hub.load('snakers4/silero-vad', 'silero_vad', force_reload=True)")
             logger.error("3. 或者下载模型文件到: ~/.cache/torch/hub/snakers4_silero-vad_master")
             self._model_loaded = False
+        
+        # 存储检测到的语音片段
+        self.speech_segments = []
+        
+        # 记录已处理的音频时长
+        self.total_processed_duration = 0.0
+        
+        # 存储已处理的语音片段ID，用于去重
+        self.processed_segment_ids = set()
+        
+        logger.info(f"流式VAD处理器初始化完成，使用设备: {self.device}")
     
     def is_available(self) -> bool:
         """检查VAD模型是否可用"""
         return self._model_loaded
     
-    def get_speech_segments(self, audio_data: np.ndarray) -> List[Dict[str, int]]:
+    def process_chunk(self, audio_chunk: np.ndarray) -> List[Dict]:
         """
-        获取语音片段的时间戳
+        处理音频块，返回检测到的语音片段
+        
+        参数:
+            audio_chunk: 音频数据，numpy数组
+            
+        返回:
+            检测到的语音片段列表
+        """
+        if not self._model_loaded:
+            logger.warning("VAD模型未加载，无法处理音频")
+            return []
+        
+        # 确保音频数据是float32格式
+        if audio_chunk.dtype != np.float32:
+            audio_chunk = audio_chunk.astype(np.float32)
+        
+        # 计算块大小（对于16000 Hz采样率，使用512个样本）
+        chunk_size = 512
+        
+        # 将音频数据分割成适当大小的块
+        speech_dict = []
+        for i in range(0, len(audio_chunk), chunk_size):
+            # 提取一个块
+            chunk = audio_chunk[i:i+chunk_size]
+            
+            # 如果块大小不足，填充零
+            if len(chunk) < chunk_size:
+                chunk = np.pad(chunk, (0, chunk_size - len(chunk)), 'constant')
+            
+            # 转换为PyTorch张量
+            chunk_tensor = torch.from_numpy(chunk).to(self.device)
+            
+            # 使用VADIterator处理块
+            try:
+                result = self.vad_iterator(chunk_tensor)
+                if result:
+                    speech_dict.extend(result)
+            except Exception as e:
+                logger.error(f"处理音频块失败: {e}")
+        
+        # 更新已处理的音频时长
+        chunk_duration = len(audio_chunk) / self.sample_rate
+        self.total_processed_duration += chunk_duration
+        
+        # 如果检测到语音片段
+        if speech_dict:
+            # 提取语音片段
+            speech_segments = []
+            
+            for segment in speech_dict:
+                # 计算绝对时间戳
+                absolute_start = self.total_processed_duration - chunk_duration + segment['start'] / self.sample_rate
+                absolute_end = self.total_processed_duration - chunk_duration + segment['end'] / self.sample_rate
+                
+                # 创建片段ID
+                segment_id = f"{absolute_start:.3f}_{absolute_end:.3f}"
+                
+                # 如果片段未处理过，添加到结果列表
+                if segment_id not in self.processed_segment_ids:
+                    # 提取音频片段
+                    start_sample = segment['start']
+                    end_sample = segment['end']
+                    
+                    if end_sample <= len(audio_chunk):
+                        speech_segment = audio_chunk[start_sample:end_sample]
+                        
+                        # 创建结果字典
+                        result_segment = {
+                            'audio': speech_segment,
+                            'start': absolute_start,
+                            'end': absolute_end,
+                            'duration': absolute_end - absolute_start
+                        }
+                        
+                        speech_segments.append(result_segment)
+                        self.processed_segment_ids.add(segment_id)
+                        
+                        logger.info(f"检测到语音片段: 开始={absolute_start:.2f}秒, 结束={absolute_end:.2f}秒, "
+                                   f"时长={(absolute_end - absolute_start):.2f}秒")
+            
+            return speech_segments
+        
+        return []
+    
+    def reset(self):
+        """重置VADIterator"""
+        self.vad_iterator.reset_states()
+        self.speech_segments = []
+        self.total_processed_duration = 0.0
+        self.processed_segment_ids = set()
+        logger.info("VADIterator已重置")
+    
+    def extract_speech_segments(self, audio_data: np.ndarray) -> Tuple[List[np.ndarray], List[Dict]]:
+        """
+        从音频数据中提取语音片段
         
         参数:
             audio_data: 音频数据，numpy数组
             
         返回:
-            语音片段列表，格式为[{'start': start_sample, 'end': end_sample}, ...]
+            语音片段列表和时间戳列表
         """
         if not self._model_loaded:
-            logger.warning("VAD模型未加载，无法获取语音片段")
-            return []
+            logger.warning("VAD模型未加载，无法提取语音片段")
+            return [], []
         
         # 确保音频数据是float32格式
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
         
-        # 转换为PyTorch张量
-        audio_tensor = torch.from_numpy(audio_data).to(self.device)
+        # 计算块大小（对于16000 Hz采样率，使用512个样本）
+        chunk_size = 512
         
-        # 获取语音时间戳
-        try:
-            speech_timestamps = self.get_speech_timestamps(
-                audio_tensor,
-                self.model,
-                threshold=self.config.threshold,
-                sampling_rate=self.sample_rate,
-                min_speech_duration_ms=self.config.min_speech_duration_ms,
-                min_silence_duration_ms=self.config.min_silence_duration_ms,
-                window_size_samples=self.config.window_size_samples,
-                speech_pad_ms=self.config.speech_pad_ms
-            )
+        # 将音频数据分割成适当大小的块
+        all_timestamps = []
+        for i in range(0, len(audio_data), chunk_size):
+            # 提取一个块
+            chunk = audio_data[i:i+chunk_size]
             
-            logger.debug(f"检测到 {len(speech_timestamps)} 个语音片段")
-            return speech_timestamps
+            # 如果块大小不足，填充零
+            if len(chunk) < chunk_size:
+                chunk = np.pad(chunk, (0, chunk_size - len(chunk)), 'constant')
             
-        except Exception as e:
-            logger.error(f"获取语音时间戳失败: {e}")
-            return []
-    
-    def extract_speech_segments(self, audio_data: np.ndarray) -> Tuple[List[np.ndarray], List[Dict[str, int]]]:
-        """
-        提取语音片段
+            # 转换为PyTorch张量
+            chunk_tensor = torch.from_numpy(chunk).to(self.device)
+            
+            # 使用get_speech_timestamps获取语音时间戳
+            try:
+                timestamps = self.get_speech_timestamps(
+                    chunk_tensor,
+                    self.model,
+                    threshold=self.config.threshold,
+                    sampling_rate=self.sample_rate,
+                    min_silence_duration_ms=self.config.min_silence_duration_ms,
+                    speech_pad_ms=self.config.speech_pad_ms
+                )
+                
+                # 调整时间戳，考虑块的偏移
+                for ts in timestamps:
+                    ts['start'] += i
+                    ts['end'] += i
+                
+                all_timestamps.extend(timestamps)
+            except Exception as e:
+                logger.error(f"提取语音片段失败: {e}")
         
-        参数:
-            audio_data: 音频数据，numpy数组
-            
-        返回:
-            (语音片段列表, 时间戳列表)
-        """
-        speech_timestamps = self.get_speech_segments(audio_data)
+        # 合并相邻的时间戳
+        merged_timestamps = []
+        if all_timestamps:
+            current_ts = all_timestamps[0].copy()
+            for ts in all_timestamps[1:]:
+                # 如果当前时间戳的结束时间与下一个时间戳的开始时间相差不大，合并它们
+                if ts['start'] - current_ts['end'] < 1000:  # 1000个样本，约62.5毫秒
+                    current_ts['end'] = ts['end']
+                else:
+                    merged_timestamps.append(current_ts)
+                    current_ts = ts.copy()
+            merged_timestamps.append(current_ts)
+        
+        speech_timestamps = merged_timestamps
+        
+        # 提取语音片段
         speech_segments = []
-        
-        for segment in speech_timestamps:
-            start_sample = segment['start']
-            end_sample = segment['end']
+        for timestamp in speech_timestamps:
+            start_sample = timestamp['start']
+            end_sample = timestamp['end']
             
-            # 提取语音片段
             if end_sample <= len(audio_data):
                 speech_segment = audio_data[start_sample:end_sample]
                 speech_segments.append(speech_segment)
         
         return speech_segments, speech_timestamps
     
-    def merge_segments(self, segments: List[np.ndarray], max_gap_ms: int = 500) -> List[np.ndarray]:
+    def merge_segments(self, speech_segments: List[np.ndarray], max_gap_ms: int = 500) -> List[np.ndarray]:
         """
         合并相近的语音片段
         
         参数:
-            segments: 语音片段列表
-            max_gap_ms: 最大间隔(毫秒)，小于此间隔的片段将被合并
+            speech_segments: 语音片段列表
+            max_gap_ms: 最大间隔(毫秒)
             
         返回:
             合并后的语音片段列表
         """
-        if not segments or len(segments) < 2:
-            return segments
-            
-        max_gap_samples = int(max_gap_ms * self.sample_rate / 1000)
-        merged_segments = []
-        current_segment = segments[0]
+        if len(speech_segments) <= 1:
+            return speech_segments
         
-        for i in range(1, len(segments)):
-            # 如果当前片段与下一个片段间隔小于阈值，则合并
-            if len(segments[i-1]) + max_gap_samples >= len(segments[i]):
-                # 创建合并后的片段
-                gap_size = max_gap_samples - len(segments[i-1])
-                if gap_size > 0:
-                    # 添加静音填充
-                    silence = np.zeros(gap_size, dtype=np.float32)
-                    current_segment = np.concatenate([current_segment, silence, segments[i]])
-                else:
-                    current_segment = np.concatenate([current_segment, segments[i]])
-            else:
-                # 间隔过大，保存当前片段并开始新片段
-                merged_segments.append(current_segment)
-                current_segment = segments[i]
-        
-        # 添加最后一个片段
-        merged_segments.append(current_segment)
-        
-        return merged_segments
+        # 这里简化处理，实际上需要更复杂的逻辑
+        # 在实际实现中，需要考虑时间戳、采样率等因素
+        # 这里简单地返回原始片段
+        return speech_segments
     
-    def simple_energy_vad(self, audio_data: np.ndarray, threshold: float = 0.01) -> bool:
+    def convert_to_wav(self, audio_data: np.ndarray) -> bytes:
         """
-        简单的能量检测VAD（备用方法）
+        将音频数据转换为WAV格式
         
         参数:
-            audio_data: 音频数据
-            threshold: 能量阈值
+            audio_data: 音频数据，numpy数组
             
         返回:
-            是否检测到语音
+            WAV格式的二进制数据
         """
-        if audio_data is None or len(audio_data) == 0:
-            return False
-            
-        # 简单的能量检测
-        energy = np.mean(np.abs(audio_data))
-        return energy > threshold
-    
-    def analyze_speech_segments(self, speech_timestamps: List[Dict], 
-                               audio_length_seconds: float,
-                               output_dir: Optional[Union[str, Path]] = None,
-                               generate_plot: bool = True) -> Dict:
-        """
-        分析语音段的详细信息
+        # 确保音频数据是float32格式
+        if audio_data.dtype != np.float32:
+            audio_data = audio_data.astype(np.float32)
         
-        参数:
-            speech_timestamps: 语音段时间戳列表
-            audio_length_seconds: 音频总长度（秒）
-            output_dir: 输出目录，用于保存分析结果和图表
-            generate_plot: 是否生成可视化图表
-            
-        返回:
-            包含分析结果的字典
-        """
-        # 计算语音段数量
-        segment_count = len(speech_timestamps)
-        logger.info(f"总语音段数量: {segment_count}")
+        # 转换为16-bit PCM
+        audio_int16 = (audio_data * 32767).astype(np.int16)
         
-        if segment_count == 0:
-            logger.warning("未检测到语音段")
-            return {"segment_count": 0}
+        # 创建WAV文件
+        wav_buffer = io.BytesIO()
+        with wave.open(wav_buffer, 'wb') as wav_file:
+            wav_file.setnchannels(1)  # 单声道
+            wav_file.setsampwidth(2)  # 16-bit
+            wav_file.setframerate(self.sample_rate)
+            wav_file.writeframes(audio_int16.tobytes())
         
-        # 计算每个语音段的长度
-        segment_lengths = []
-        total_speech_duration = 0
-        segment_details = []
-        
-        for i, segment in enumerate(speech_timestamps):
-            start = segment.get('start', 0)
-            end = segment.get('end', 0)
-            
-            # 如果时间戳是样本索引而不是秒，则转换为秒
-            if isinstance(start, int) and start > 1000:  # 假设大于1000的是样本索引
-                start = start / self.sample_rate
-            if isinstance(end, int) and end > 1000:
-                end = end / self.sample_rate
-                
-            duration = end - start
-            segment_lengths.append(duration)
-            total_speech_duration += duration
-            
-            segment_details.append({
-                "index": i+1,
-                "start": start,
-                "end": end,
-                "duration": duration
-            })
-            
-            logger.debug(f"语音段 {i+1}: 开始={start:.2f}秒, 结束={end:.2f}秒, 持续={duration:.2f}秒")
-        
-        # 计算统计信息
-        avg_length = np.mean(segment_lengths)
-        min_length = np.min(segment_lengths)
-        max_length = np.max(segment_lengths)
-        median_length = np.median(segment_lengths)
-        std_length = np.std(segment_lengths)
-        
-        # 语音占比
-        speech_ratio = (total_speech_duration / audio_length_seconds) * 100
-        
-        # 统计信息
-        stats = {
-            "segment_count": segment_count,
-            "avg_length": avg_length,
-            "min_length": min_length,
-            "max_length": max_length,
-            "median_length": median_length,
-            "std_length": std_length,
-            "total_speech_duration": total_speech_duration,
-            "audio_length_seconds": audio_length_seconds,
-            "speech_ratio": speech_ratio
-        }
-        
-        logger.info(f"平均语音段长度: {avg_length:.2f}秒")
-        logger.info(f"最短语音段长度: {min_length:.2f}秒")
-        logger.info(f"最长语音段长度: {max_length:.2f}秒")
-        logger.info(f"语音占比: {speech_ratio:.2f}%")
-        
-        # 语音段长度分布
-        # 创建长度区间
-        bins = [0, 1, 2, 3, 5, 10, float('inf')]
-        bin_labels = ['0-1秒', '1-2秒', '2-3秒', '3-5秒', '5-10秒', '10秒以上']
-        
-        # 统计每个区间的语音段数量
-        distribution = [0] * len(bin_labels)
-        for length in segment_lengths:
-            for i in range(len(bins) - 1):
-                if bins[i] <= length < bins[i + 1]:
-                    distribution[i] += 1
-                    break
-        
-        # 分布统计
-        distribution_stats = {}
-        for i, count in enumerate(distribution):
-            percentage = (count / segment_count) * 100
-            distribution_stats[bin_labels[i]] = {
-                "count": count,
-                "percentage": percentage
-            }
-            logger.info(f"{bin_labels[i]}: {count}段 ({percentage:.1f}%)")
-        
-        # 计算语音段间隔
-        gap_stats = {}
-        if segment_count > 1:
-            gaps = []
-            for i in range(1, len(speech_timestamps)):
-                gap = speech_timestamps[i].get('start', 0) - speech_timestamps[i-1].get('end', 0)
-                # 如果是样本索引，转换为秒
-                if gap > 1000:
-                    gap = gap / self.sample_rate
-                gaps.append(gap)
-            
-            avg_gap = np.mean(gaps)
-            max_gap = np.max(gaps)
-            
-            gap_stats = {
-                "avg_gap": avg_gap,
-                "max_gap": max_gap
-            }
-            
-            logger.info(f"平均间隔: {avg_gap:.2f}秒")
-            logger.info(f"最大间隔: {max_gap:.2f}秒")
-        
-        # 可视化语音段分布
-        plot_path = None
-        if generate_plot:
-            try:
-                plt.figure(figsize=(10, 6))
-                plt.hist(segment_lengths, bins=10, alpha=0.7, color='blue')
-                plt.title('语音段长度分布直方图')
-                plt.xlabel('语音段长度 (秒)')
-                plt.ylabel('频次')
-                plt.grid(True, alpha=0.3)
-                
-                # 保存图表
-                if output_dir:
-                    output_path = Path(output_dir)
-                    output_path.mkdir(parents=True, exist_ok=True)
-                    plot_path = str(output_path / 'vad_segment_distribution.png')
-                else:
-                    plot_path = 'vad_segment_distribution.png'
-                    
-                plt.savefig(plot_path)
-                logger.info(f"已保存语音段长度分布直方图到 '{plot_path}'")
-                plt.close()
-            except Exception as e:
-                logger.error(f"无法生成可视化: {e}")
-        
-        # 返回完整的分析结果
-        result = {
-            "stats": stats,
-            "segment_details": segment_details,
-            "distribution": distribution_stats,
-            "gaps": gap_stats,
-            "plot_path": plot_path
-        }
-        
-        return result
-    
-    def process_audio_file(self, audio_path: Union[str, Path], 
-                          analyze: bool = True,
-                          output_dir: Optional[Union[str, Path]] = None) -> Dict:
-        """
-        处理音频文件，检测语音段并进行分析
-        
-        参数:
-            audio_path: 音频文件路径
-            analyze: 是否分析语音段
-            output_dir: 输出目录
-            
-        返回:
-            处理结果字典
-        """
-        if not self._model_loaded:
-            logger.error("VAD模型未加载，无法处理音频")
-            return {"error": "VAD模型未加载"}
-        
-        try:
-            # 读取音频文件
-            wav = self.read_audio(str(audio_path))
-            
-            # 获取音频长度（秒）
-            audio_length_seconds = len(wav) / self.sample_rate
-            
-            # 获取语音时间戳
-            speech_timestamps = self.get_speech_timestamps(
-                wav,
-                self.model,
-                return_seconds=True,  # 返回秒为单位的时间戳
-                threshold=self.config.threshold,
-                sampling_rate=self.sample_rate,
-                min_speech_duration_ms=self.config.min_speech_duration_ms,
-                min_silence_duration_ms=self.config.min_silence_duration_ms,
-                window_size_samples=self.config.window_size_samples,
-                speech_pad_ms=self.config.speech_pad_ms
-            )
-            
-            result = {
-                "audio_path": str(audio_path),
-                "audio_length_seconds": audio_length_seconds,
-                "speech_timestamps": speech_timestamps,
-                "segment_count": len(speech_timestamps)
-            }
-            
-            # 分析语音段
-            if analyze and speech_timestamps:
-                analysis = self.analyze_speech_segments(
-                    speech_timestamps, 
-                    audio_length_seconds,
-                    output_dir=output_dir
-                )
-                result["analysis"] = analysis
-            
-            return result
-            
-        except Exception as e:
-            logger.error(f"处理音频文件失败: {e}")
-            return {"error": str(e)}
+        return wav_buffer.getvalue()
 
 
 class VADBufferProcessor:
@@ -435,7 +326,7 @@ class VADBufferProcessor:
         self.buffer_size = int(buffer_size_seconds * self.sample_rate)
         
         # 初始化VAD处理器
-        self.vad_processor = SileroVADProcessor(self.config)
+        self.vad_processor = StreamingVADProcessor(self.config)
         
         # 初始化音频缓冲区
         self.buffer = np.array([], dtype=np.float32)

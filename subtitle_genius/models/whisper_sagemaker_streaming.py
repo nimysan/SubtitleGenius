@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from sagemaker_whisper import WhisperSageMakerClient, chunk_audio
 
 from ..subtitle.models import Subtitle
-from ..audio.vad_processor import SileroVADProcessor, VADConfig
+from ..audio.vad_processor import StreamingVADProcessor, VADConfig
 
 logger = logging.getLogger(__name__)
 
@@ -361,7 +361,7 @@ class WhisperSageMakerStreamingModel:
                 window_size_samples=self.config.vad_window_size_samples,
                 speech_pad_ms=self.config.vad_speech_pad_ms
             )
-            vad_processor = SileroVADProcessor(vad_config)
+            vad_processor = StreamingVADProcessor(vad_config)
             
             if vad_processor.is_available():
                 speech_segments, speech_timestamps = vad_processor.extract_speech_segments(remaining_audio)

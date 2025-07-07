@@ -1,12 +1,12 @@
 """
-VAD与WebSocket集成示例
-演示如何在WebSocket服务器中集成VAD处理和Whisper SageMaker转录
+增强版VAD与WebSocket集成示例
+演示如何在WebSocket服务器中集成增强版VAD处理和Whisper SageMaker转录
 """
 
 import asyncio
 import logging
 import numpy as np
-from typing import Dict, List, Optional, AsyncGenerator, Tuple
+from typing import Dict, List, Optional, AsyncGenerator
 import json
 import io
 import wave
@@ -22,8 +22,9 @@ logging.basicConfig(level=logging.INFO,
                    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-# 导入VAD处理器和Whisper模型
-from subtitle_genius.audio.vad_processor import StreamingVADProcessor, VADConfig
+# 导入增强版VAD处理器和Whisper模型
+from enhanced_vad_processor import EnhancedVADBufferProcessor
+from subtitle_genius.audio.vad_processor import VADConfig
 from subtitle_genius.models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel, WhisperSageMakerStreamConfig
 from subtitle_genius.subtitle.models import Subtitle
 
@@ -104,8 +105,8 @@ class MockWebSocket:
         return f"{hours:02d}:{minutes:02d}:{seconds:06.3f}"
 
 
-class VADWebSocketHandler:
-    """VAD WebSocket处理器"""
+class EnhancedVADWebSocketHandler:
+    """增强版VAD WebSocket处理器"""
     
     def __init__(self, 
                  client_id: str,
@@ -115,7 +116,7 @@ class VADWebSocketHandler:
                  region_name: str = "us-east-1",
                  segment_log_file: str = "logs/vad_segments.log"):
         """
-        初始化VAD WebSocket处理器
+        初始化增强版VAD WebSocket处理器
         
         参数:
             client_id: 客户端ID
@@ -137,8 +138,8 @@ class VADWebSocketHandler:
             speech_pad_ms=30              # 语音片段前后填充(毫秒)
         )
         
-        # 初始化流式VAD处理器
-        self.vad_processor = StreamingVADProcessor(config=self.vad_config)
+        # 初始化增强版VAD缓冲区处理器
+        self.vad_buffer = EnhancedVADBufferProcessor(config=self.vad_config, buffer_size_seconds=30.0)
         
         # 初始化Whisper模型
         self.whisper_model = None
@@ -172,7 +173,7 @@ class VADWebSocketHandler:
         # 初始化VAD分段日志记录器
         self.segment_logger = VADSegmentLogger(segment_log_file)
         
-        logger.info(f"VAD WebSocket处理器初始化完成，客户端ID: {client_id}, 语言: {language}")
+        logger.info(f"增强版VAD WebSocket处理器初始化完成，客户端ID: {client_id}, 语言: {language}")
     
     async def process_audio_chunk(self, audio_data: np.ndarray, websocket: MockWebSocket) -> None:
         """
@@ -186,39 +187,42 @@ class VADWebSocketHandler:
         chunk_duration = len(audio_data) / 16000
         logger.info(f"处理音频块 #{self.chunk_count}, 大小: {len(audio_data)} 样本, 时长: {chunk_duration:.2f}秒")
         
-        # 使用流式VAD处理器处理音频块
-        speech_segments = self.vad_processor.process_chunk(audio_data)
+        # 更新总处理时长
+        self.total_processed_duration += chunk_duration
         
-        # 处理检测到的语音片段
-        for i, segment in enumerate(speech_segments):
+        # 添加到VAD缓冲区
+        self.vad_buffer.add_audio_chunk(audio_data)
+        
+        # 处理缓冲区，获取完整的语音片段
+        complete_segments = self.vad_buffer.process_buffer()
+        
+        # 处理完整的语音片段
+        for i, (segment, timestamp) in enumerate(complete_segments):
             self.segment_count += 1
-            
-            # 提取音频数据和时间戳
-            audio_segment = segment['audio']
-            segment_duration = len(audio_segment) / 16000
+            segment_duration = len(segment) / 16000
             
             # 记录VAD分段信息
             self.segment_logger.log_segment(
                 segment_index=self.segment_count,
-                start_time=segment['start'],
-                end_time=segment['end']
+                start_time=timestamp['start'],
+                end_time=timestamp['end']
             )
             
-            logger.info(f"处理语音片段 #{self.segment_count}: "
-                       f"开始={segment['start']:.2f}s, "
-                       f"结束={segment['end']:.2f}s, "
+            logger.info(f"处理完整语音片段 #{self.segment_count}: "
+                       f"开始={timestamp['start']:.2f}s, "
+                       f"结束={timestamp['end']:.2f}s, "
                        f"时长={segment_duration:.2f}秒")
             
             # 如果有Whisper模型，转录语音片段
             if self.whisper_model:
                 # 转录音频
-                transcription = await self.whisper_model.transcribe_audio(audio_segment, self.language)
+                transcription = await self.whisper_model.transcribe_audio(segment, self.language)
                 
                 if transcription:
                     # 创建字幕对象
                     subtitle = Subtitle(
-                        start=segment['start'],
-                        end=segment['end'],
+                        start=timestamp['start'],
+                        end=timestamp['end'],
                         text=transcription
                     )
                     
@@ -358,8 +362,8 @@ async def simulate_websocket_connection(audio_file: str, language: str = "zh", o
     # 创建客户端ID
     client_id = "test_client_001"
     
-    # 创建VAD WebSocket处理器
-    handler = VADWebSocketHandler(
+    # 创建增强版VAD WebSocket处理器
+    handler = EnhancedVADWebSocketHandler(
         client_id=client_id,
         language=language,
         whisper_endpoint="endpoint-quick-start-z9afg",  # 替换为实际的端点名称
@@ -423,11 +427,11 @@ async def main():
     import argparse
     
     # 解析命令行参数
-    parser = argparse.ArgumentParser(description="VAD与WebSocket集成示例")
+    parser = argparse.ArgumentParser(description="增强版VAD与WebSocket集成示例")
     parser.add_argument("audio_file", help="要处理的音频文件路径")
     parser.add_argument("--language", default="zh", help="语言代码 (默认: zh)")
     parser.add_argument("--output-vtt", help="输出VTT文件路径")
-    parser.add_argument("--segment-log", default="logs/vad_segments.log", help="VAD分段日志文件路径 (默认: logs/vad_segments.log)")
+    parser.add_argument("--segment-log", default="logs/enhanced_vad_segments.log", help="VAD分段日志文件路径 (默认: logs/enhanced_vad_segments.log)")
     args = parser.parse_args()
     
     # 检查文件是否存在
@@ -440,7 +444,7 @@ async def main():
     output_vtt = args.output_vtt
     if not output_vtt:
         # 使用音频文件名作为VTT文件名
-        output_vtt = str(audio_file.with_suffix(".vtt"))
+        output_vtt = str(audio_file.with_suffix(".enhanced.vtt"))
         logger.info(f"未指定输出VTT文件路径，使用默认路径: {output_vtt}")
     
     # 确保日志目录存在
