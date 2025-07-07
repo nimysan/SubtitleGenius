@@ -13,7 +13,7 @@ from .base import SubtitleCorrectionService, CorrectionInput, CorrectionOutput
 class BedrockCorrectionService(SubtitleCorrectionService):
     """基于Amazon Bedrock的多语言字幕纠错服务"""
     
-    def __init__(self, model_id: str = "us.anthropic.claude-3-haiku-20240307-v1:0"):
+    def __init__(self, model_id: str = "us.anthropic.claude-3-5-sonnet-20240620-v1:0"):
         self.model_id = model_id
         self.service_name = "bedrock_claude"
         

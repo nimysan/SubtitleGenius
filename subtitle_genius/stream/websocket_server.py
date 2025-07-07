@@ -107,12 +107,12 @@ async def startup_event():
     except Exception as e:
         logger.error(f"SageMaker Whisper模型初始化失败: {e}")
     
-    # 初始化Correction服务 (使用Haiku模型)
+    # 初始化Correction服务 (使用Sonnet模型)
     try:
         correction_service = BedrockCorrectionService(
-            model_id="us.anthropic.claude-3-haiku-20240307-v1:0"
+            model_id="us.anthropic.claude-3-5-sonnet-20240620-v1:0"
         )
-        logger.info("Bedrock Correction服务已初始化 (Claude 3 Haiku)")
+        logger.info("Bedrock Correction服务已初始化 (Claude 3.5 Sonnet)")
     except Exception as e:
         logger.error(f"Correction服务初始化失败: {e}")
         correction_service = None
