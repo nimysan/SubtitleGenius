@@ -110,6 +110,22 @@ uv run start_websocket_server.py
 - 🎙️ **语音适配**: 根据语速和停顿动态调整边界
 - 📝 **内容优化**: 目标22字/chunk，最大35字/chunk
 
+### TODO 下一个任务
+
+![alt text](image-1.png)  
+
+单行字幕句子太长了。。。 导致延迟和显示效果问题
+
+1. 思考的方向是：Wsihper本身能够断句（断句是否能够输出时间timestamp)
+2. 然后将一个chunk，比如10s产生的字幕，根据第一个断句的结果拆分成多个字幕
+3. 每个字幕根据时间偏移独立更新时间戳
+4. 这个在处理要在之前的流程中添加一个处理节点 transcribe-correction-split(if need)-translate.
+5. 代码架构和之前一致 split和拆分作为一个独立的模块。
+
+先看看是否可行
+
+下一个问题--- 就是 字幕长句子 - 需要处理一下  尝试
+
 ## Open Universal Arabic ASR Leaderboard
 
 [Open Universal Arabic ASR Leaderboard](https://arxiv.org/html/2412.13788v1)

@@ -212,22 +212,27 @@ def chunk_audio(audio_data, chunk_duration_seconds=30):
         print(f"Error in chunk_audio: {str(e)}")
         return []
 
-def transcribe_chunk(sagemaker_client, chunk_data, endpoint_name, language="en", task="transcribe"):
-    """Transcribe a single audio chunk using SageMaker runtime with Whisper endpoint."""
+def transcribe_chunk(sagemaker_client, chunk_data, endpoint_name, language="en", task="transcribe", return_timestamps=True):
+    """Transcribe a single audio chunk using SageMaker runtime with Whisper endpoint.
+        Wshiper parameters: https://huggingface.co/docs/transformers/model_doc/whisper#transformers.WhisperForConditionalGeneration.generate.return_segments
+    """
     try:
         logger.info(f"Using SageMaker endpoint: {endpoint_name}")
         logger.info(f"Sending request with audio size: {len(chunk_data)} bytes")
         logger.info(f"Language parameter: {language}")
+        logger.info(f"Return timestamps: {return_timestamps}. So far NOT-SUPPORT")
         
         # Convert audio to hex string (format expected by Whisper endpoints)
         hex_audio = chunk_data.hex()
         
-        # Create payload for Whisper endpoint
+        # Create payload for Whisper endpoint with segment-level timestamps
         payload = {
             "audio_input": hex_audio,
             "language": language,
             "task": task,
-            "top_p": 0.9
+            "top_p": 0.9,
+            # "return_segments": True,  # 启用segment-level timestamps
+            # "return_timestamps": True   # 指定segment级别的时间戳
         }
         
         # Invoke the SageMaker endpoint
@@ -426,7 +431,8 @@ class WhisperSageMakerClient:
                         chunk_data, 
                         self.endpoint_name,
                         language=self._convert_language_code(language),
-                        task=task
+                        task=task,
+                        return_timestamps=True  # 启用segment-level timestamps
                     )
                     
                     all_transcriptions.append(result)
