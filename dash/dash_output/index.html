@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DASH播放器</title>
+    <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f0f0f0;
+            color: #333;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background-color: white;
+            padding: 20px;
+            border-radius: 5px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            color: #2c3e50;
+            text-align: center;
+        }
+        .player-container {
+            width: 100%;
+            margin: 20px 0;
+        }
+        video {
+            width: 100%;
+            max-width: 1080px;
+            margin: 0 auto;
+            display: block;
+            background-color: #000;
+        }
+        .controls {
+            margin: 20px 0;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 5px;
+        }
+        .controls label {
+            margin-right: 10px;
+            font-weight: bold;
+        }
+        .info {
+            margin-top: 20px;
+            padding: 10px;
+            background-color: #e9f7fe;
+            border-left: 4px solid #2196f3;
+            border-radius: 3px;
+        }
+        .footer {
+            margin-top: 30px;
+            text-align: center;
+            font-size: 0.9em;
+            color: #7f8c8d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>DASH流媒体播放器</h1>
+        
+        <div class="player-container">
+            <video id="videoPlayer" controls></video>
+        </div>
+        
+        <div class="controls">
+            <label for="manifestInput">DASH清单URL:</label>
+            <input type="text" id="manifestInput" value="manifest.mpd" style="width: 60%;">
+            <button onclick="loadManifest()">加载</button>
+            <button onclick="toggleStats()">显示/隐藏统计</button>
+        </div>
+        
+        <div id="stats" class="info" style="display: none;">
+            <h3>播放统计</h3>
+            <div id="statsContent"></div>
+        </div>
+        
+        <div class="info">
+            <h3>使用说明</h3>
+            <p>1. 确认DASH清单URL正确</p>
+            <p>2. 点击"加载"按钮加载视频</p>
+            <p>3. 使用视频播放器控件控制播放</p>
+            <p>4. 点击"显示/隐藏统计"查看播放统计信息</p>
+        </div>
+        
+        <div class="footer">
+            <p>由SubtitleGenius DASH流媒体字幕处理系统提供支持</p>
+        </div>
+    </div>
+    
+    <script>
+        let player = null;
+        let statsInterval = null;
+        
+        function loadManifest() {
+            const manifestUrl = document.getElementById('manifestInput').value;
+            
+            if (player) {
+                player.destroy();
+                clearInterval(statsInterval);
+            }
+            
+            player = dashjs.MediaPlayer().create();
+            player.initialize(document.querySelector("#videoPlayer"), manifestUrl, true);
+            player.updateSettings({
+                'streaming': {
+                    'abr': {
+                        'autoSwitchBitrate': {
+                            'video': true,
+                            'audio': true
+                        }
+                    },
+                    'buffer': {
+                        'stableBufferTime': 20,
+                        'bufferTimeAtTopQuality': 30
+                    }
+                }
+            });
+            
+            // 显示初始统计信息
+            updateStats();
+            
+            // 设置定期更新统计信息
+            if (statsInterval) {
+                clearInterval(statsInterval);
+            }
+            statsInterval = setInterval(updateStats, 1000);
+            
+            console.log("已加载清单:", manifestUrl);
+        }
+        
+        function toggleStats() {
+            const statsDiv = document.getElementById('stats');
+            if (statsDiv.style.display === 'none') {
+                statsDiv.style.display = 'block';
+                updateStats();
+            } else {
+                statsDiv.style.display = 'none';
+            }
+        }
+        
+        function updateStats() {
+            if (!player || !document.getElementById('stats').style.display === 'none') {
+                return;
+            }
+            
+            const video = document.querySelector("#videoPlayer");
+            const statsContent = document.getElementById('statsContent');
+            
+            try {
+                const dashMetrics = player.getDashMetrics();
+                const streamInfo = player.getActiveStream().getStreamInfo();
+                const dashAdapter = player.getDashAdapter();
+                
+                if (dashMetrics && streamInfo) {
+                    const repSwitch = dashMetrics.getCurrentRepresentationSwitch('video', true);
+                    const bufferLevel = dashMetrics.getCurrentBufferLevel('video');
+                    const bitrate = repSwitch ? Math.round(dashAdapter.getBandwidthForRepresentation(repSwitch.to, streamInfo.index) / 1000) : 0;
+                    
+                    let stats = `
+                        <p><strong>播放状态:</strong> ${video.paused ? '暂停' : '播放中'}</p>
+                        <p><strong>当前时间:</strong> ${video.currentTime.toFixed(2)}秒</p>
+                        <p><strong>视频时长:</strong> ${video.duration.toFixed(2)}秒</p>
+                        <p><strong>缓冲区:</strong> ${bufferLevel ? bufferLevel.toFixed(2) : 0}秒</p>
+                        <p><strong>当前码率:</strong> ${bitrate} kbps</p>
+                    `;
+                    
+                    statsContent.innerHTML = stats;
+                }
+            } catch (e) {
+                console.error("获取统计信息时出错:", e);
+            }
+        }
+        
+        // 页面加载完成后自动加载清单
+        window.addEventListener('DOMContentLoaded', loadManifest);
+    </script>
+</body>
+</html>
