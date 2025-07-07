@@ -221,11 +221,20 @@
   font-size: 0.95rem;
   line-height: 1.4;
   color: rgba(255, 255, 255, 0.9);
-  direction: rtl; /* 支持阿拉伯语从右到左 */
-  text-align: right;
   word-wrap: break-word; /* 长单词自动换行 */
   overflow-wrap: break-word; /* 确保文本换行 */
   max-width: 100%; /* 限制最大宽度 */
+}
+
+/* 文本方向类 */
+.text-direction-rtl {
+  direction: rtl;
+  text-align: right;
+}
+
+.text-direction-ltr {
+  direction: ltr;
+  text-align: left;
 }
 
 .subtitle-content .translated-text {

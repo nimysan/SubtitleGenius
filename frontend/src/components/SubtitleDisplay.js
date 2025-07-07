@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import './SubtitleDisplay.css';
 
-const SubtitleDisplay = ({ subtitles, currentTime, onSaveSubtitles, saveStatus, hasClientId }) => {
+const SubtitleDisplay = ({ subtitles, currentTime, onSaveSubtitles, saveStatus, hasClientId, defaultLanguage = 'ar' }) => {
   const [filename, setFilename] = useState('');
   const [showFilenameInput, setShowFilenameInput] = useState(false);
   const subtitleRef = useRef(null);
@@ -38,6 +38,13 @@ const SubtitleDisplay = ({ subtitles, currentTime, onSaveSubtitles, saveStatus, 
   
   // 反向字幕列表（最新的在上面）
   const reversedSubtitles = [...subtitles].reverse();
+  
+  // 确定文本方向的函数
+  const getTextDirectionClass = (subtitle) => {
+    // 如果字幕有language属性，使用它；否则，使用默认语言
+    const lang = subtitle.language || defaultLanguage;
+    return lang === 'ar' ? 'text-direction-rtl' : 'text-direction-ltr';
+  };
 
   return (
     <div className="subtitle-display-container">
@@ -126,7 +133,7 @@ const SubtitleDisplay = ({ subtitles, currentTime, onSaveSubtitles, saveStatus, 
                 </span>
               </div>
               <div className="subtitle-content">
-                <div className="original-text">{subtitle.text}</div>
+                <div className={`original-text ${getTextDirectionClass(subtitle)}`}>{subtitle.text}</div>
                 {subtitle.translated_text && (
                   <div className="translated-text">{subtitle.translated_text}</div>
                 )}

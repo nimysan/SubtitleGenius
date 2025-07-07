@@ -100,7 +100,9 @@ class BedrockCorrectionService(SubtitleCorrectionService):
                 corrected_subtitle=result.get("corrected_text", input_data.current_subtitle),
                 has_correction=result.get("has_correction", False),
                 confidence=result.get("confidence", 0.8),
-                correction_details=result.get("details", None)
+                correction_details=result.get("details", None),
+                split_subtitles=result.get("split_subtitles", []),
+                has_split=result.get("has_split", False)
             )
             
         except Exception as e:
@@ -137,15 +139,26 @@ class BedrockCorrectionService(SubtitleCorrectionService):
 4. 术语标准化 (根据场景使用标准术语)
 5. 上下文一致性 (与历史字幕保持一致的称呼和术语)
 
+【长句拆分】
+如果当前字幕是一个较长的句子（通常超过15-20个字），请将其拆分成2-3个较短的、语义完整的句子。
+拆分时请遵循以下原则：
+1. 每个拆分后的句子必须语义完整，表达清晰
+2. 保持原始语义不变
+3. 在自然的断句点进行拆分（如逗号、分号等位置）
+4. 拆分后的每个句子长度应相对均衡
+
 请以JSON格式返回结果:
 {{
     "corrected_text": "纠正后的字幕文本",
     "has_correction": true/false,
     "confidence": 0.0-1.0,
-    "details": "具体的纠正说明"
+    "details": "具体的纠正说明",
+    "has_split": true/false,
+    "split_subtitles": ["拆分后的第一个句子", "拆分后的第二个句子", ...]
 }}
 
-如果字幕没有错误，请返回原文本并设置has_correction为false。"""
+如果字幕没有错误，请返回原文本并设置has_correction为false。
+如果字幕不需要拆分（句子较短或已经是简短句子），请设置has_split为false并保持split_subtitles为空数组。"""
         
         return prompt
     
@@ -242,6 +255,11 @@ Business scene terminology guidance:
             # 尝试解析JSON
             try:
                 result = json.loads(content)
+                # 确保结果包含所有必要的字段
+                if "has_split" not in result:
+                    result["has_split"] = False
+                if "split_subtitles" not in result:
+                    result["split_subtitles"] = []
                 return result
             except json.JSONDecodeError:
                 # 如果不是JSON格式，尝试提取纠正后的文本
@@ -260,7 +278,9 @@ Business scene terminology guidance:
                     "corrected_text": corrected_text,
                     "has_correction": corrected_text != original_text,
                     "confidence": 0.8,
-                    "details": "Bedrock纠错"
+                    "details": "Bedrock纠错",
+                    "has_split": False,
+                    "split_subtitles": []
                 }
                 
         except Exception as e:
@@ -269,7 +289,9 @@ Business scene terminology guidance:
                 "corrected_text": original_text,
                 "has_correction": False,
                 "confidence": 0.5,
-                "details": f"解析失败: {str(e)}"
+                "details": f"解析失败: {str(e)}",
+                "has_split": False,
+                "split_subtitles": []
             }
     
     async def _mock_correction(self, input_data: CorrectionInput) -> CorrectionOutput:
@@ -300,6 +322,44 @@ Business scene terminology guidance:
             has_correction = True
             details.append("标点符号纠正")
         
+        # 模拟长句拆分
+        has_split = False
+        split_subtitles = []
+        
+        # 简单的长句拆分逻辑：按标点符号拆分
+        if len(corrected) > 20:  # 假设超过20个字符的句子需要拆分
+            # 按标点符号拆分
+            potential_splits = re.split(r'([.!?;,，。！？；])', corrected)
+            
+            # 重组带标点的句子片段
+            segments = []
+            for i in range(0, len(potential_splits)-1, 2):
+                if i+1 < len(potential_splits):
+                    segments.append(potential_splits[i] + potential_splits[i+1])
+                else:
+                    segments.append(potential_splits[i])
+            
+            # 如果最后一个元素没有配对，添加它
+            if len(potential_splits) % 2 == 1:
+                segments.append(potential_splits[-1])
+            
+            # 合并短片段，形成2-3个均衡的句子
+            if len(segments) >= 2:
+                has_split = True
+                
+                # 简单策略：尽量平均分配
+                if len(segments) == 2:
+                    split_subtitles = segments
+                elif len(segments) == 3:
+                    split_subtitles = segments
+                else:
+                    # 如果有更多片段，尝试合并成2-3个句子
+                    mid_point = len(segments) // 2
+                    split_subtitles = [
+                        ''.join(segments[:mid_point]),
+                        ''.join(segments[mid_point:])
+                    ]
+        
         # 模拟处理延迟
         await asyncio.sleep(0.1)
         
@@ -307,7 +367,9 @@ Business scene terminology guidance:
             corrected_subtitle=corrected,
             has_correction=has_correction,
             confidence=0.9 if has_correction else 1.0,
-            correction_details="; ".join(details) if details else f"模拟{lang_config['name']}纠错"
+            correction_details="; ".join(details) if details else f"模拟{lang_config['name']}纠错",
+            split_subtitles=split_subtitles,
+            has_split=has_split
         )
     
     def get_service_name(self) -> str:

@@ -355,7 +355,9 @@ function App() {
                   </div>
                 </div>
                 <div className="subtitle-text-container">
-                  <div className="original-text">{subtitles[subtitles.length - 1].text}</div>
+                  <div className={`original-text ${selectedLanguage === 'ar' ? 'text-direction-rtl' : 'text-direction-ltr'}`}>
+                    {subtitles[subtitles.length - 1].text}
+                  </div>
                   {subtitles[subtitles.length - 1].translated_text && (
                     <div className="translated-text">{subtitles[subtitles.length - 1].translated_text}</div>
                   )}
@@ -372,6 +374,7 @@ function App() {
             onSaveSubtitles={handleSaveSubtitles}
             saveStatus={saveStatus}
             hasClientId={!!clientId}
+            defaultLanguage={selectedLanguage}
           />
         </div>
 

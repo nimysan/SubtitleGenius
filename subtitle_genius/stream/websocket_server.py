@@ -597,6 +597,8 @@ async def send_subtitle(
         # 步骤1: 字幕纠错 (如果启用)
         corrected_text = subtitle.text
         correction_applied = False
+        split_subtitles = []
+        has_split = False
         
         if enable_correction and subtitle.text.strip() and correction_service:
             try:
@@ -627,6 +629,12 @@ async def send_subtitle(
                     subtitle.text = corrected_text
                 else:
                     logger.info(f"字幕无需纠错: '{subtitle.text}'")
+                
+                # 处理长句拆分结果
+                if correction_result.has_split and correction_result.split_subtitles:
+                    has_split = True
+                    split_subtitles = correction_result.split_subtitles
+                    logger.info(f"字幕已拆分为 {len(split_subtitles)} 个子句: {split_subtitles}")
                     
             except Exception as e:
                 logger.error(f"字幕纠错失败: {e}")
@@ -635,41 +643,106 @@ async def send_subtitle(
         else:
             logger.info(f"跳过纠错 - 启用状态: {enable_correction}")
         
-        # 步骤2: 翻译字幕文本 (如果启用，使用纠错后的文本)
-        if enable_translation and corrected_text.strip():
-            try:
-                # 使用翻译服务翻译文本
-                translation_result = await translation_manager.translate(
-                    text=corrected_text,
-                    target_lang=target_language,
-                    service="bedrock"  # 优先使用Bedrock翻译服务
+        # 如果没有拆分，按原流程处理单个字幕
+        if not has_split:
+            # 步骤2: 翻译字幕文本 (如果启用，使用纠错后的文本)
+            if enable_translation and corrected_text.strip():
+                try:
+                    # 使用翻译服务翻译文本
+                    translation_result = await translation_manager.translate(
+                        text=corrected_text,
+                        target_lang=target_language,
+                        service="bedrock"  # 优先使用Bedrock翻译服务
+                    )
+                    
+                    # 设置翻译结果
+                    subtitle.translated_text = translation_result.translated_text
+                    logger.info(f"字幕已翻译: {corrected_text} -> {subtitle.translated_text}")
+                except Exception as e:
+                    logger.error(f"翻译失败: {e}")
+                    subtitle.translated_text = f"[翻译失败] {corrected_text}"
+            else:
+                logger.info(f"跳过翻译 - 启用状态: {enable_translation}")
+                subtitle.translated_text = None
+            
+            # 发送单个字幕
+            await websocket.send_json({
+                "type": "subtitle",
+                "subtitle": {
+                    "id": subtitle_id,
+                    "start": subtitle.start,
+                    "end": subtitle.end,
+                    "text": subtitle.text,  # 纠错后的文本
+                    "original_text": subtitle.text if not correction_applied else None,  # 原始文本(如果有纠错)
+                    "translated_text": subtitle.translated_text,
+                    "correction_applied": correction_applied,
+                    "translation_applied": enable_translation and subtitle.translated_text is not None,
+                    "target_language": target_language if enable_translation else None
+                }
+            })
+        else:
+            # 处理拆分后的多个字幕
+            # 计算每个子句的时间分配
+            total_duration = subtitle.duration
+            sub_duration = total_duration / len(split_subtitles)
+            
+            # 为每个拆分的字幕创建新的Subtitle对象并发送
+            for i, split_text in enumerate(split_subtitles):
+                # 计算子句的时间范围
+                sub_start = subtitle.start + i * sub_duration
+                sub_end = sub_start + sub_duration
+                
+                # 创建新的Subtitle对象
+                sub_subtitle = Subtitle(
+                    start=sub_start,
+                    end=sub_end,
+                    text=split_text
                 )
                 
-                # 设置翻译结果
-                subtitle.translated_text = translation_result.translated_text
-                logger.info(f"字幕已翻译: {corrected_text} -> {subtitle.translated_text}")
-            except Exception as e:
-                logger.error(f"翻译失败: {e}")
-                subtitle.translated_text = f"[翻译失败] {corrected_text}"
-        else:
-            logger.info(f"跳过翻译 - 启用状态: {enable_translation}")
-            subtitle.translated_text = None
-        
-        # 发送字幕 (包含纠错和翻译信息)
-        await websocket.send_json({
-            "type": "subtitle",
-            "subtitle": {
-                "id": subtitle_id,
-                "start": subtitle.start,
-                "end": subtitle.end,
-                "text": subtitle.text,  # 纠错后的文本
-                "original_text": subtitle.text if not correction_applied else None,  # 原始文本(如果有纠错)
-                "translated_text": subtitle.translated_text,
-                "correction_applied": correction_applied,
-                "translation_applied": enable_translation and subtitle.translated_text is not None,
-                "target_language": target_language if enable_translation else None
-            }
-        })
+                # 添加到客户端的字幕列表
+                if client_id in client_subtitles:
+                    client_subtitles[client_id].append(sub_subtitle)
+                
+                # 翻译子句
+                if enable_translation and split_text.strip():
+                    try:
+                        # 使用翻译服务翻译文本
+                        translation_result = await translation_manager.translate(
+                            text=split_text,
+                            target_lang=target_language,
+                            service="bedrock"
+                        )
+                        
+                        # 设置翻译结果
+                        sub_subtitle.translated_text = translation_result.translated_text
+                        logger.info(f"拆分字幕已翻译: {split_text} -> {sub_subtitle.translated_text}")
+                    except Exception as e:
+                        logger.error(f"拆分字幕翻译失败: {e}")
+                        sub_subtitle.translated_text = f"[翻译失败] {split_text}"
+                
+                # 发送拆分后的字幕
+                sub_id = f"{client_id}_{uuid.uuid4()}"
+                await websocket.send_json({
+                    "type": "subtitle",
+                    "subtitle": {
+                        "id": sub_id,
+                        "start": sub_subtitle.start,
+                        "end": sub_subtitle.end,
+                        "text": sub_subtitle.text,
+                        "original_text": None,  # 已经是纠错后的文本
+                        "translated_text": sub_subtitle.translated_text,
+                        "correction_applied": True,  # 拆分的字幕都是经过纠错的
+                        "translation_applied": enable_translation and sub_subtitle.translated_text is not None,
+                        "target_language": target_language if enable_translation else None,
+                        "is_split": True,  # 标记为拆分字幕
+                        "split_index": i,  # 拆分序号
+                        "split_total": len(split_subtitles),  # 拆分总数
+                        "original_subtitle_id": subtitle_id  # 原始字幕ID
+                    }
+                })
+                
+                # 短暂延迟，确保字幕按顺序发送
+                await asyncio.sleep(0.05)
     except Exception as e:
         logger.error(f"发送字幕失败: {e}")
 

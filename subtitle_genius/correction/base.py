@@ -23,6 +23,8 @@ class CorrectionOutput:
     has_correction: bool  # 是否进行了纠正
     confidence: float  # 纠正置信度 0-1
     correction_details: Optional[str] = None  # 纠正详情说明
+    split_subtitles: Optional[List[str]] = None  # 拆分后的多个字幕
+    has_split: bool = False  # 是否进行了拆分
 
 
 class SubtitleCorrectionService(ABC):
