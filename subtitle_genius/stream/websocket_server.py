@@ -12,7 +12,15 @@ from pathlib import Path
 import tempfile
 import os
 import datetime
+import time
 from dotenv import load_dotenv
+import soundfile
+import io
+import torch
+import librosa
+
+# 导入VAC相关模块
+from whisper_streaming.silero_vad_iterator import FixedVADIterator
 
 # 加载环境变量
 load_dotenv()
@@ -76,11 +84,200 @@ os.makedirs(temp_dir, exist_ok=True)
 subtitle_dir = Path("./subtitles")
 os.makedirs(subtitle_dir, exist_ok=True)
 
+# 音频处理常量
+SAMPLING_RATE = 16000
+min_chunk = 0.04
+
+# VAC处理器类
+class VACProcessor:
+    """语音活动控制器，用于检测语音活动并优化音频处理流程"""
+    
+    def __init__(self):
+        """初始化VAC处理器"""
+        # 初始化VAC
+        model, _ = torch.hub.load(
+            repo_or_dir='snakers4/silero-vad',
+            model='silero_vad'
+        )
+        self.vac = FixedVADIterator(model)
+        
+        # 初始化状态和缓冲区
+        self.status = None  # 'voice' 或 'nonvoice'
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.is_currently_final = False
+        self.buffer_offset = 0
+        self.current_buffer_size = 0
+        self.is_first = True
+        self.voice_start_time = None  # 记录语音开始的时间
+        self.voice_end_time = None    # 记录语音结束的时间
+        
+    def reset(self):
+        """重置VAC状态"""
+        self.vac.reset_states()
+        self.status = None
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.is_currently_final = False
+        self.buffer_offset = 0
+        self.current_buffer_size = 0
+        self.is_first = True
+        self.voice_start_time = None
+        self.voice_end_time = None
+    
+    def process_audio(self, audio):
+        """处理音频数据，使用VAC检测语音活动
+        
+        Args:
+            audio: numpy数组，音频数据
+            
+        Returns:
+            dict: 包含VAC处理结果的字典，可能包含'start'或'end'键
+            None: 如果没有检测到语音事件
+        """
+        vac_result = self.vac(audio)
+        logger.info(f"----------->>>>>>>The vac result is {vac_result}")
+        return vac_result
+    
+    def receive_audio_chunk(self, raw_bytes):
+        """接收并处理音频数据
+        
+        Args:
+            raw_bytes: 二进制音频数据
+            
+        Returns:
+            numpy数组: 处理后的音频数据
+            None: 如果数据不足或无效
+        """
+        # 将二进制数据转换为音频
+        out = []
+        minlimit = min_chunk * SAMPLING_RATE
+        
+        if not raw_bytes:
+            return None
+            
+        try:
+            sf = soundfile.SoundFile(io.BytesIO(raw_bytes), channels=1, endian="LITTLE", 
+                                    samplerate=SAMPLING_RATE, subtype="PCM_16", format="RAW")
+            audio, _ = librosa.load(sf, sr=SAMPLING_RATE, dtype=np.float32)
+            out.append(audio)
+        except Exception as e:
+            logger.error(f"音频数据转换失败: {e}")
+            return None
+        
+        if not out:
+            return None
+            
+        conc = np.concatenate(out)
+        
+        # 使用VAC处理音频
+        res = self.process_audio(conc)
+        self.audio_buffer = np.append(self.audio_buffer, conc)
+        self.current_buffer_size += len(conc)
+        
+        # 处理VAC检测结果
+        if res is not None:
+            if 'start' in res and 'end' not in res:
+                # 检测到语音开始
+                self.status = 'voice'
+                # 记录语音开始时间
+                self.voice_start_time = time.time()
+                logger.debug(f"VAC: 检测到语音开始，时间: {self.voice_start_time}")
+                frame = res['start'] - self.buffer_offset
+                if frame > 0:
+                    # 从检测到语音的位置开始处理
+                    audio_data = self.audio_buffer[frame:]
+                    if len(audio_data) < minlimit and self.is_first:
+                        return None
+                    self.is_first = False
+                    return audio_data
+            elif 'end' in res and 'start' not in res:
+                # 检测到语音结束
+                self.status = 'nonvoice'
+                # 记录语音结束时间
+                self.voice_end_time = time.time()
+                logger.debug(f"VAC: 检测到语音结束，时间: {self.voice_end_time}")
+                frame = res['end'] - self.buffer_offset
+                if frame > 0:
+                    # 处理到语音结束的位置
+                    audio_data = self.audio_buffer[:frame]
+                    self.is_currently_final = True
+                    self.clear_buffer()
+                    return audio_data
+            else:
+                # 检测到完整的语音段
+                self.status = 'nonvoice'
+                # 记录语音开始和结束时间
+                self.voice_start_time = time.time() - (res["end"] - res["start"]) / SAMPLING_RATE
+                self.voice_end_time = time.time()
+                logger.debug(f"VAC: 检测到完整语音段，开始时间: {self.voice_start_time}, 结束时间: {self.voice_end_time}")
+                beg = res["start"] - self.buffer_offset
+                end = res["end"] - self.buffer_offset
+                if beg >= 0 and end > beg:
+                    audio_data = self.audio_buffer[beg:end]
+                    self.is_currently_final = True
+                    self.clear_buffer()
+                    return audio_data
+        else:
+            # 没有检测到语音事件
+            if self.status == 'voice':
+                # 如果当前是语音状态，继续处理
+                if len(self.audio_buffer) >= minlimit or not self.is_first:
+                    self.is_first = False
+                    audio_data = self.audio_buffer.copy()
+                    self.clear_buffer()
+                    return audio_data
+            
+        # 如果缓冲区过大，进行裁剪以防止内存溢出
+        if len(self.audio_buffer) > SAMPLING_RATE * 10:  # 保留最多10秒
+            self.buffer_offset += max(0, len(self.audio_buffer) - SAMPLING_RATE * 10)
+            self.audio_buffer = self.audio_buffer[-SAMPLING_RATE * 10:]
+            
+        # 如果数据不足且是第一次处理，返回None
+        if len(conc) < minlimit and self.is_first:
+            return None
+            
+        self.is_first = False
+        return conc
+    
+    def clear_buffer(self):
+        """清除音频缓冲区"""
+        self.buffer_offset += len(self.audio_buffer)
+        self.audio_buffer = np.array([], dtype=np.float32)
+        self.current_buffer_size = 0
+
+# 全局VAC处理器实例
+vac_processor = None
+
+def receive_audio_chunk(raw_bytes):
+    """接收并处理音频数据块
+    
+    Args:
+        raw_bytes: 二进制音频数据
+        
+    Returns:
+        numpy数组: 处理后的音频数据
+        None: 如果数据不足或无效
+    """
+    global vac_processor
+    
+    # 如果VAC处理器未初始化，则初始化
+    if vac_processor is None:
+        vac_processor = VACProcessor()
+        
+    # 使用VAC处理器处理音频
+    return vac_processor.receive_audio_chunk(raw_bytes)
 
 @app.on_event("startup")
 async def startup_event():
     """应用启动时初始化模型"""
-    global sagemaker_whisper_model, correction_service
+    global sagemaker_whisper_model, correction_service, vac_processor
+    
+    # 初始化VAC处理器
+    try:
+        vac_processor = VACProcessor()
+        logger.info("VAC处理器已初始化")
+    except Exception as e:
+        logger.error(f"VAC处理器初始化失败: {e}")
+        vac_processor = None
     
     # 初始化SageMaker Whisper模型
     try:
@@ -141,6 +338,14 @@ async def websocket_whisper_endpoint(
     
     # 初始化字幕列表
     client_subtitles[client_id] = []
+    
+    # 重置VAC处理器状态
+    global vac_processor
+    if vac_processor is None:
+        vac_processor = VACProcessor()
+    else:
+        vac_processor.reset()
+    logger.info("VAC处理器已重置")
     
     # 如果没有提供文件名，使用时间戳
     if not filename:
@@ -207,52 +412,73 @@ async def websocket_whisper_endpoint(
                         # 处理二进制消息（音频数据）
                         data = message["bytes"]
                         logger.info(f"接收到音频数据，大小: {len(data)} bytes, 数据类型: {type(data)}")
-                        
-                        # 将WAV数据转换为numpy数组
-                        try:
-                            audio_data = await process_wav_data(data)
-                            logger.info(f"音频数据处理结果: {type(audio_data) if audio_data is not None else 'None'}")
-                        except Exception as wav_error:
-                            logger.error(f"处理WAV数据失败: {wav_error}")
-                            logger.error(f"WAV数据前32字节: {data[:32] if len(data) >= 32 else data}")
-                            continue
-                          
+                        audio_data = receive_audio_chunk(data)
                         if audio_data is not None:
                             # 添加到音频块列表
                             audio_chunks.append(audio_data)
                             logger.info(f"音频数据添加到chunks，当前chunks数量: {len(audio_chunks)}")
                             
-                            # 创建异步生成器
-                            async def audio_generator():
-                                yield audio_data
-                            
-                            # 使用SageMaker Whisper模型处理音频
-                            if sagemaker_whisper_model and sagemaker_whisper_model.is_available():
-                                logger.info("开始使用SageMaker Whisper处理音频...")
-                                # 为当前语言更新模型配置
-                                await update_whisper_model_language(language)
+                            # 检查VAC状态
+                            if vac_processor.status == 'voice':
+                                logger.info("VAC状态为'voice'，处理音频数据")
                                 
-                                async for subtitle in sagemaker_whisper_model.transcribe_stream(
-                                    audio_generator(), language=language
-                                ):
-                                    # 如果有待处理的时间戳，应用到字幕
-                                    if pending_timestamp:
-                                        subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
-                                        logger.info(f"应用时间戳到字幕: chunk_index={pending_timestamp.get('chunk_index')}")
-                                        pending_timestamp = None  # 清除已使用的时间戳
+                                # 记录当前时间戳信息
+                                current_timestamp = {
+                                    'chunk_index': current_chunk_index,
+                                    'start_time': time.time() - vac_processor.voice_start_time if hasattr(vac_processor, 'voice_start_time') else time.time(),
+                                    'end_time': time.time(),
+                                    'duration': len(audio_data) / SAMPLING_RATE,
+                                    'total_samples_processed': vac_processor.buffer_offset + len(audio_data),
+                                    'audio_start_time': time.time() - len(audio_data) / SAMPLING_RATE,
+                                    'processing_start_time': time.time(),
+                                    'current_time': time.time()
+                                }
+                                
+                                # 如果没有待处理的时间戳，使用当前生成的时间戳
+                                if not pending_timestamp:
+                                    pending_timestamp = current_timestamp
+                                    logger.info(f"生成新的时间戳信息: chunk_index={current_timestamp.get('chunk_index')}")
+                                
+                                # 创建异步生成器
+                                async def audio_generator():
+                                    yield audio_data
+                                
+                                # 使用SageMaker Whisper模型处理音频
+                                if sagemaker_whisper_model and sagemaker_whisper_model.is_available():
+                                    logger.info("开始使用SageMaker Whisper处理音频...")
+                                    # 为当前语言更新模型配置
+                                    await update_whisper_model_language(language)
                                     
-                                    # 发送字幕回客户端（传递处理参数）
-                                    logging.info(f"Received subtitle: {subtitle}")
-                                    await send_subtitle(
-                                        websocket, subtitle, client_id, 
-                                        language=language,
-                                        enable_correction=correction,
-                                        enable_translation=translation,
-                                        target_language=target_language
-                                    )
+                                    async for subtitle in sagemaker_whisper_model.transcribe_stream(
+                                        audio_generator(), language=language
+                                    ):
+                                        # 应用时间戳到字幕
+                                        if pending_timestamp:
+                                            subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
+                                            logger.info(f"应用时间戳到字幕: chunk_index={pending_timestamp.get('chunk_index')}, start={subtitle.start:.2f}s, end={subtitle.end:.2f}s")
+                                            
+                                            # 存储时间戳信息
+                                            if client_id not in client_timestamps:
+                                                client_timestamps[client_id] = {}
+                                            client_timestamps[client_id][current_chunk_index] = pending_timestamp
+                                            
+                                            pending_timestamp = None  # 清除已使用的时间戳
+                                        
+                                        # 发送字幕回客户端（传递处理参数）
+                                        logging.info(f"Received subtitle: {subtitle}")
+                                        await send_subtitle(
+                                            websocket, subtitle, client_id, 
+                                            language=language,
+                                            enable_correction=correction,
+                                            enable_translation=translation,
+                                            target_language=target_language
+                                        )
+                                else:
+                                    logger.warning("SageMaker Whisper模型不可用")
                             else:
-                                logger.warning("SageMaker Whisper模型不可用")
-                                    
+                                logger.info(f"VAC状态为'{vac_processor.status}'，跳过音频处理")
+                                
+                            # 无论VAC状态如何，都增加chunk索引
                             current_chunk_index += 1
                         else:
                             logger.warning("音频数据处理失败，跳过此chunk")
@@ -328,6 +554,14 @@ async def websocket_transcribe_endpoint(
     # 初始化字幕列表
     client_subtitles[client_id] = []
     
+    # 重置VAC处理器状态
+    global vac_processor
+    if vac_processor is None:
+        vac_processor = VACProcessor()
+    else:
+        vac_processor.reset()
+    logger.info("VAC处理器已重置")
+    
     # 如果没有提供文件名，使用时间戳
     if not filename:
         filename = f"subtitle_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
@@ -360,9 +594,9 @@ async def websocket_transcribe_endpoint(
         # 处理接收到的音频数据
         async for data in websocket.iter_bytes():
             try:
-                # 将WAV数据转换为numpy数组
-                audio_data = await process_wav_data(data)
-                  
+                # 使用VAC处理音频数据
+                audio_data = receive_audio_chunk(data)
+                
                 if audio_data is not None:
                     # 添加到音频块列表
                     audio_chunks.append(audio_data)
@@ -454,15 +688,19 @@ async def get_chunk_timestamp(client_id: str, chunk_index: int) -> Optional[Dict
 async def apply_timestamp_to_subtitle(subtitle: Subtitle, timestamp_info: Dict) -> Subtitle:
     """将时间戳信息应用到字幕对象"""
     if timestamp_info:
-        # 使用前端提供的绝对时间戳
+        # 使用VAC检测到的语音片段时间戳
         subtitle.start = timestamp_info['start_time']
         subtitle.end = timestamp_info['end_time']
         
-        # 如果字幕有相对时间戳，需要进行映射
-        # 这里假设Whisper返回的是chunk内的相对时间戳
-        # 实际实现可能需要更复杂的时间戳映射逻辑
+        # 确保结束时间大于开始时间
+        if subtitle.end <= subtitle.start:
+            subtitle.end = subtitle.start + timestamp_info['duration']
         
+        # 记录详细的时间戳信息到日志
         logger.info(f"应用时间戳到字幕: {subtitle.start:.2f}s - {subtitle.end:.2f}s")
+        logger.info(f"时间戳详情: chunk_index={timestamp_info.get('chunk_index')}, "
+                   f"duration={timestamp_info.get('duration'):.2f}s, "
+                   f"total_samples={timestamp_info.get('total_samples_processed')}")
     
     return subtitle
 

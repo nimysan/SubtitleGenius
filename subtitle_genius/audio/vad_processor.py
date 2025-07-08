@@ -17,6 +17,125 @@ import time
 
 logger = logging.getLogger(__name__)
 
+class VADIterator:
+    def __init__(self,
+                 model,
+                 threshold: float = 0.5,
+                 sampling_rate: int = 16000,
+                 min_silence_duration_ms: int = 500,
+                 speech_pad_ms: int = 100
+                 ):
+        """
+        流式处理模拟类
+
+        参数
+        ----------
+        model: 预加载的 .jit/.onnx silero VAD 模型
+
+        threshold: float (默认 - 0.5)
+            语音阈值。Silero VAD 为每个音频块输出语音概率，高于此值的概率被视为语音。
+            最好为每个数据集单独调整此参数，但"懒惰"的 0.5 对大多数数据集都相当不错。
+
+        sampling_rate: int (默认 - 16000)
+            目前 silero VAD 模型支持 8000 和 16000 采样率
+
+        min_silence_duration_ms: int (默认 - 500 毫秒)
+            在每个语音块结束时，等待 min_silence_duration_ms 才将其分离
+
+        speech_pad_ms: int (默认 - 100 毫秒)
+            最终语音块的每一侧都由 speech_pad_ms 填充
+        """
+
+        self.model = model
+        self.threshold = threshold
+        self.sampling_rate = sampling_rate
+
+        if sampling_rate not in [8000, 16000]:
+            raise ValueError('VADIterator 不支持 [8000, 16000] 以外的采样率')
+
+        self.min_silence_samples = sampling_rate * min_silence_duration_ms / 1000
+        self.speech_pad_samples = sampling_rate * speech_pad_ms / 1000
+        self.reset_states()
+
+    def reset_states(self):
+        self.model.reset_states()
+        self.triggered = False
+        self.temp_end = 0
+        self.current_sample = 0
+
+    @torch.no_grad()
+    def __call__(self, x, return_seconds=False, time_resolution: int = 1):
+        """
+        x: torch.Tensor
+            音频块（参见仓库中的示例）
+
+        return_seconds: bool (默认 - False)
+            是否以秒为单位返回时间戳（默认 - 样本）
+
+        time_resolution: int (默认 - 1)
+            请求为秒时语音坐标的时间分辨率
+        """
+
+        if not torch.is_tensor(x):
+            try:
+                x = torch.Tensor(x)
+            except:
+                raise TypeError("音频无法转换为张量。请手动转换")
+
+        window_size_samples = len(x[0]) if x.dim() == 2 else len(x)
+        self.current_sample += window_size_samples
+
+        speech_prob = self.model(x, self.sampling_rate).item()
+
+        if (speech_prob >= self.threshold) and self.temp_end:
+            self.temp_end = 0
+
+        if (speech_prob >= self.threshold) and not self.triggered:
+            self.triggered = True
+            speech_start = max(0, self.current_sample - self.speech_pad_samples - window_size_samples)
+            return {'start': int(speech_start) if not return_seconds else round(speech_start / self.sampling_rate, time_resolution)}
+
+        if (speech_prob < self.threshold - 0.15) and self.triggered:
+            if not self.temp_end:
+                self.temp_end = self.current_sample
+            if self.current_sample - self.temp_end < self.min_silence_samples:
+                return None
+            else:
+                speech_end = self.temp_end + self.speech_pad_samples - window_size_samples
+                self.temp_end = 0
+                self.triggered = False
+                return {'end': int(speech_end) if not return_seconds else round(speech_end / self.sampling_rate, time_resolution)}
+
+        return None
+
+
+class FixedVADIterator(VADIterator):
+    '''
+    修复VADIterator，允许处理任意长度的音频，而不仅仅是恰好512帧。
+    如果一次处理的音频很长并且检测到多个有声段，
+    则__call__返回第一个段的开始，以及最后一个段的结束（或中间，表示没有结束）。
+    '''
+
+    def reset_states(self):
+        super().reset_states()
+        self.buffer = np.array([], dtype=np.float32)
+
+    def __call__(self, x, return_seconds=False):
+        self.buffer = np.append(self.buffer, x) 
+        ret = None
+        while len(self.buffer) >= 512:
+            r = super().__call__(self.buffer[:512], return_seconds=return_seconds)
+            self.buffer = self.buffer[512:]
+            if ret is None:
+                ret = r
+            elif r is not None:
+                if 'end' in r:
+                    ret['end'] = r['end']  # 后面的结束点
+                if 'start' in r and 'end' in ret:  # 有一个更早的开始点
+                    # 删除结束点，将此段与前一段合并
+                    del ret['end']
+        return ret if ret != {} else None
+
 @dataclass
 class VADConfig:
     """VAD配置"""
@@ -53,8 +172,8 @@ class StreamingVADProcessor:
             (self.get_speech_timestamps, self.save_audio, self.read_audio, 
              self.VADIterator, self.collect_chunks) = self.utils
             
-            # 创建VADIterator实例
-            self.vad_iterator = self.VADIterator(
+            # 创建FixedVADIterator实例
+            self.vad_iterator = FixedVADIterator(
                 model=self.model,
                 threshold=self.config.threshold,
                 sampling_rate=self.sample_rate,
@@ -82,7 +201,7 @@ class StreamingVADProcessor:
         # 存储已处理的语音片段ID，用于去重
         self.processed_segment_ids = set()
         
-        logger.info(f"流式VAD处理器初始化完成，使用设备: {self.device}")
+        logger.info(f"流式VAD处理器初始化完成，使用设备: {self.device} - {self.vad_iterator}")
     
     def is_available(self) -> bool:
         """检查VAD模型是否可用"""
@@ -106,29 +225,19 @@ class StreamingVADProcessor:
         if audio_chunk.dtype != np.float32:
             audio_chunk = audio_chunk.astype(np.float32)
         
-        # 计算块大小（对于16000 Hz采样率，使用512个样本）
-        chunk_size = 512
-        
-        # 将音频数据分割成适当大小的块
+        # 使用FixedVADIterator处理音频块
+        # FixedVADIterator可以处理任意长度的音频，不需要分割成固定大小的块
         speech_dict = []
-        for i in range(0, len(audio_chunk), chunk_size):
-            # 提取一个块
-            chunk = audio_chunk[i:i+chunk_size]
-            
-            # 如果块大小不足，填充零
-            if len(chunk) < chunk_size:
-                chunk = np.pad(chunk, (0, chunk_size - len(chunk)), 'constant')
-            
+        try:
             # 转换为PyTorch张量
-            chunk_tensor = torch.from_numpy(chunk).to(self.device)
+            audio_tensor = torch.from_numpy(audio_chunk).to(self.device)
             
-            # 使用VADIterator处理块
-            try:
-                result = self.vad_iterator(chunk_tensor)
-                if result:
-                    speech_dict.extend(result)
-            except Exception as e:
-                logger.error(f"处理音频块失败: {e}")
+            # 使用FixedVADIterator处理音频
+            result = self.vad_iterator(audio_tensor)
+            if result:
+                speech_dict.append(result)
+        except Exception as e:
+            logger.error(f"处理音频块失败: {e}")
         
         # 更新已处理的音频时长
         chunk_duration = len(audio_chunk) / self.sample_rate
@@ -200,41 +309,24 @@ class StreamingVADProcessor:
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
         
-        # 计算块大小（对于16000 Hz采样率，使用512个样本）
-        chunk_size = 512
-        
-        # 将音频数据分割成适当大小的块
-        all_timestamps = []
-        for i in range(0, len(audio_data), chunk_size):
-            # 提取一个块
-            chunk = audio_data[i:i+chunk_size]
-            
-            # 如果块大小不足，填充零
-            if len(chunk) < chunk_size:
-                chunk = np.pad(chunk, (0, chunk_size - len(chunk)), 'constant')
-            
+        # 使用get_speech_timestamps获取语音时间戳
+        # 直接处理整个音频数据，不需要分割成固定大小的块
+        try:
             # 转换为PyTorch张量
-            chunk_tensor = torch.from_numpy(chunk).to(self.device)
+            audio_tensor = torch.from_numpy(audio_data).to(self.device)
             
             # 使用get_speech_timestamps获取语音时间戳
-            try:
-                timestamps = self.get_speech_timestamps(
-                    chunk_tensor,
-                    self.model,
-                    threshold=self.config.threshold,
-                    sampling_rate=self.sample_rate,
-                    min_silence_duration_ms=self.config.min_silence_duration_ms,
-                    speech_pad_ms=self.config.speech_pad_ms
-                )
-                
-                # 调整时间戳，考虑块的偏移
-                for ts in timestamps:
-                    ts['start'] += i
-                    ts['end'] += i
-                
-                all_timestamps.extend(timestamps)
-            except Exception as e:
-                logger.error(f"提取语音片段失败: {e}")
+            all_timestamps = self.get_speech_timestamps(
+                audio_tensor,
+                self.model,
+                threshold=self.config.threshold,
+                sampling_rate=self.sample_rate,
+                min_silence_duration_ms=self.config.min_silence_duration_ms,
+                speech_pad_ms=self.config.speech_pad_ms
+            )
+        except Exception as e:
+            logger.error(f"提取语音片段失败: {e}")
+            all_timestamps = []
         
         # 合并相邻的时间戳
         merged_timestamps = []

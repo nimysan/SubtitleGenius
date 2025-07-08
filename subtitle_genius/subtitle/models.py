@@ -16,8 +16,8 @@ class Subtitle:
         """验证数据"""
         if self.start < 0:
             raise ValueError("Start time cannot be negative")
-        if self.end <= self.start:
-            raise ValueError("End time must be greater than start time")
+        # if self.end <= self.start:
+        #     raise ValueError("End time must be greater than start time")
         if not self.text.strip():
             raise ValueError("Subtitle text cannot be empty")
     
