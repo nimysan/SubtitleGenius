@@ -5,6 +5,9 @@ import json
 import asyncio
 import time
 import numpy as np
+import io
+import soundfile as sf
+
 from typing import Dict, List, Optional, Any, AsyncGenerator
 
 from fastapi import WebSocket, WebSocketDisconnect
@@ -132,7 +135,26 @@ class MessageHandler:
                 "type": "error",
                 "message": f"JSON解析失败: {str(e)}"
             }
-    
+            
+    def bytes_to_audio_data(self, binary_data):
+        """
+        将WebSocket接收到的二进制WAV数据转换为与sf.read()返回格式相同的格式
+        
+        参数:
+            binary_data: WebSocket接收到的二进制数据
+            
+        返回:
+            tuple: (audio_data, sample_rate) - 与sf.read()返回格式相同
+        """
+        # 使用io.BytesIO创建一个内存文件对象
+        wav_io = io.BytesIO(binary_data)
+        
+        # 使用soundfile直接从内存中读取WAV数据
+        # 这会自动处理WAV头部并提取采样率
+        audio_data, sample_rate = sf.read(wav_io)
+        
+        return audio_data, sample_rate
+
     async def handle_binary_message(
         self, 
         client_id: str, 
@@ -161,6 +183,11 @@ class MessageHandler:
             None: 如果音频数据无效或不需要处理
         """
         try:
+            audio_data, sample_rate = self.bytes_to_audio_data(binary_data)
+            
+            print(f"音频数据: 形状={audio_data.shape}, 类型={audio_data.dtype}")
+            print(f"采样率: {sample_rate} Hz")
+            print(f"音频时长: {len(audio_data)}长度")
             # 将音频数据添加到VAC处理器的连续缓冲区
             if not self.vac_processor.add_audio_chunk(binary_data):
                 logger.warning("添加音频数据到VAC处理器失败")
@@ -169,6 +196,10 @@ class MessageHandler:
             # 获取VAC处理器的缓冲区统计信息
             buffer_stats = self.vac_processor.get_buffer_stats()
             logger.debug(f"VAC缓冲区统计: {buffer_stats}")
+            
+                        # 将音频数据转换为numpy数组
+                 # 转换为与sf.read()相同的格式
+            
             
             # 检查是否有待处理的语音段
             results = []

@@ -2,6 +2,6 @@
 
 from .vac_processor import VACProcessor
 from .subtitle_processor import SubtitleProcessor
-from .message_handler import MessageHandler
+from .audio_stream_handler import MessageHandler
 
 __all__ = ['VACProcessor', 'SubtitleProcessor', 'MessageHandler']
