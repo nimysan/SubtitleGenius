@@ -840,63 +840,213 @@ def main():
     # Compare VAD methods and get processed continuous segments
     continuous_segments = compare_vad_methods(batch_results, best_chunked_results, continuous_results, streaming_results)
     
-    # Print key findings
-    print("\n===== 关键发现 =====")
-    print("1. 分块大小的影响:")
-    print(f"   - 最佳分块大小: {best_chunk_size} 秒")
-    print("   - 较小的分块 (5-7秒) 可能会导致语音段被过度分割")
-    print("   - 较大的分块 (15-20秒) 可能会导致处理延迟增加")
-    print("   - 分块大小应根据语音特点和实时性要求进行平衡")
+    # TODO 把这边的节点 对比 batch_results/continuous_results/streaming_results
+    print("\n" + "="*80)
+    print("📊 详细VAD方法对比分析")
+    print("="*80)
     
-    print("\n2. 处理方法比较:")
-    print("   - 批处理 (Batch): 全局最优，但不适用于实时处理")
-    print("   - 分块处理 (Chunked): 平衡实时性和准确性，适合大多数场景")
-    print("   - 连续处理 (Continuous): 最实时，但可能会导致语音段分割不准确")
-    
-    print("\n3. 最佳实践:")
-    print(f"   - 对于中文解说，推荐使用 {best_chunk_size} 秒的分块大小")
-    print("   - VAD参数: threshold=0.3, min_silence_duration_ms=300, speech_pad_ms=100")
-    print("   - 在实际应用中，可以根据具体需求动态调整分块大小")
-    
-    print("\n4. 性能考虑:")
-    print("   - 分块大小越小，处理延迟越低，但准确性可能降低")
-    print("   - 分块大小越大，准确性越高，但处理延迟也越高")
-    print("   - 在资源受限的环境中，可以考虑使用较小的分块大小")
-    
-    # Calculate detailed statistics
-    batch_duration = sum(seg['end'] - seg['start'] for seg in batch_results)
-    chunked_duration = sum(seg['end'] - seg['start'] for seg in best_chunked_results if 'end' in seg and 'start' in seg and seg['end'] > seg['start'])
-    continuous_duration = sum(seg['duration'] for seg in continuous_segments)
-    
-    # Calculate average segment durations
-    batch_avg_duration = batch_duration / len(batch_results) if batch_results else 0
-    chunked_avg_duration = chunked_duration / len(best_chunked_results) if best_chunked_results else 0
-    continuous_avg_duration = continuous_duration / len(continuous_segments) if continuous_segments else 0
-    
-    # Calculate the number of chunks
-    num_chunks = int(np.ceil(len(audio_data) / (best_chunk_size * sample_rate)))
-    
-    print("\n===== 详细统计 =====")
-    print(f"音频总长度: {len(audio_data)/sample_rate:.2f} 秒")
-    print(f"语音占比: {batch_duration/(len(audio_data)/sample_rate)*100:.1f}%")
-    
-    print("\n语音段数量比较:")
-    print(f"- Batch: {len(batch_results)} 段")
-    print(f"- Chunked ({best_chunk_size}s): {len(best_chunked_results)} 段")
-    print(f"- Continuous: {len(continuous_segments)} 段")
-    
-    print("\n平均语音段长度:")
-    print(f"- Batch: {batch_avg_duration:.2f} 秒")
-    print(f"- Chunked ({best_chunk_size}s): {chunked_avg_duration:.2f} 秒")
-    print(f"- Continuous: {continuous_avg_duration:.2f} 秒")
+    detailed_vad_comparison(batch_results, continuous_segments, streaming_results, len(audio_data)/sample_rate)
 
+
+def detailed_vad_comparison(batch_results, continuous_results, streaming_results, audio_duration):
+    """
+    详细对比三种VAD方法的关键指标
+    
+    Args:
+        batch_results: 批处理VAD结果
+        continuous_results: 连续VAD结果  
+        streaming_results: 流式VAD结果
+        audio_duration: 音频总时长
+    """
+    
+    # 1. 基础统计对比
+    print("\n🔢 基础统计对比")
+    print("-" * 60)
+    
+    methods = {
+        'Batch': batch_results,
+        'Continuous': continuous_results, 
+        'Streaming': streaming_results
+    }
+    
+    stats = {}
+    for method_name, results in methods.items():
+        if results:
+            # 计算总语音时长
+            total_speech_duration = sum(seg['end'] - seg['start'] for seg in results)
+            
+            # 计算平均语音段长度
+            avg_segment_duration = total_speech_duration / len(results)
+            
+            # 计算最长和最短语音段
+            durations = [seg['end'] - seg['start'] for seg in results]
+            max_duration = max(durations)
+            min_duration = min(durations)
+            
+            # 计算语音占比
+            speech_ratio = total_speech_duration / audio_duration * 100
+            
+            stats[method_name] = {
+                'segment_count': len(results),
+                'total_speech_duration': total_speech_duration,
+                'avg_segment_duration': avg_segment_duration,
+                'max_segment_duration': max_duration,
+                'min_segment_duration': min_duration,
+                'speech_ratio': speech_ratio
+            }
+            
+            print(f"{method_name:12} | 段数: {len(results):2d} | 总时长: {total_speech_duration:6.1f}s | "
+                  f"平均: {avg_segment_duration:4.1f}s | 最长: {max_duration:5.1f}s | "
+                  f"最短: {min_duration:4.1f}s | 占比: {speech_ratio:4.1f}%")
+    
+    # 2. 时间精度对比
+    print(f"\n⏱️  时间精度对比")
+    print("-" * 60)
+    
+    if streaming_results and batch_results:
+        # 计算时间戳差异
+        timestamp_diffs = []
+        for i, (batch_seg, stream_seg) in enumerate(zip(batch_results, streaming_results)):
+            start_diff = abs(batch_seg['start'] - stream_seg['start'])
+            end_diff = abs(batch_seg['end'] - stream_seg['end'])
+            timestamp_diffs.extend([start_diff, end_diff])
+            
+            if i < 5:  # 只显示前5个段的详细对比
+                print(f"段{i+1:2d} | Batch: {batch_seg['start']:6.2f}-{batch_seg['end']:6.2f}s | "
+                      f"Stream: {stream_seg['start']:6.2f}-{stream_seg['end']:6.2f}s | "
+                      f"差异: {start_diff:4.2f}s/{end_diff:4.2f}s")
+        
+        avg_timestamp_diff = sum(timestamp_diffs) / len(timestamp_diffs)
+        max_timestamp_diff = max(timestamp_diffs)
+        print(f"\n时间戳差异统计: 平均 {avg_timestamp_diff:.3f}s, 最大 {max_timestamp_diff:.3f}s")
+    
+    # 3. 语音段分布分析
+    print(f"\n📈 语音段时长分布分析")
+    print("-" * 60)
+    
+    duration_ranges = [(0, 1), (1, 3), (3, 5), (5, 10), (10, float('inf'))]
+    range_labels = ['<1s', '1-3s', '3-5s', '5-10s', '>10s']
+    
+    for method_name, results in methods.items():
+        if results:
+            durations = [seg['end'] - seg['start'] for seg in results]
+            distribution = []
+            
+            for min_dur, max_dur in duration_ranges:
+                count = sum(1 for d in durations if min_dur <= d < max_dur)
+                percentage = count / len(durations) * 100
+                distribution.append(f"{count:2d}({percentage:4.1f}%)")
+            
+            print(f"{method_name:12} | " + " | ".join(f"{label:>5}: {dist}" 
+                  for label, dist in zip(range_labels, distribution)))
+    
+    # 4. 一致性分析
+    print(f"\n🎯 方法一致性分析")
+    print("-" * 60)
+    
+    if len(methods) >= 2:
+        method_pairs = [
+            ('Batch', 'Continuous'),
+            ('Batch', 'Streaming'), 
+            ('Continuous', 'Streaming')
+        ]
+        
+        for method1, method2 in method_pairs:
+            if method1 in stats and method2 in stats:
+                # 段数差异
+                count_diff = abs(stats[method1]['segment_count'] - stats[method2]['segment_count'])
+                count_diff_pct = count_diff / stats[method1]['segment_count'] * 100
+                
+                # 总时长差异
+                duration_diff = abs(stats[method1]['total_speech_duration'] - stats[method2]['total_speech_duration'])
+                duration_diff_pct = duration_diff / stats[method1]['total_speech_duration'] * 100
+                
+                # 重叠率计算
+                overlap_rate = calculate_overlap(methods[method1], methods[method2]) * 100
+                
+                print(f"{method1:12} vs {method2:12} | 段数差异: {count_diff:2d}({count_diff_pct:4.1f}%) | "
+                      f"时长差异: {duration_diff:4.1f}s({duration_diff_pct:4.1f}%) | 重叠率: {overlap_rate:5.1f}%")
+    
+    # 5. 性能评估
+    print(f"\n⚡ 性能特征评估")
+    print("-" * 60)
+    
+    performance_analysis = {
+        'Batch': {
+            'accuracy': '★★★★★',
+            'latency': '★☆☆☆☆', 
+            'memory': '★★★☆☆',
+            'realtime': '❌',
+            'use_case': '离线高精度处理'
+        },
+        'Continuous': {
+            'accuracy': '★★★★☆',
+            'latency': '★★★★☆',
+            'memory': '★★★★☆', 
+            'realtime': '✅',
+            'use_case': '实时处理平衡方案'
+        },
+        'Streaming': {
+            'accuracy': '★★★★★',
+            'latency': '★★★★★',
+            'memory': '★★★★★',
+            'realtime': '✅', 
+            'use_case': '实时流式处理'
+        }
+    }
+    
+    print(f"{'方法':12} | {'精度':8} | {'延迟':8} | {'内存':8} | {'实时':6} | 适用场景")
+    print("-" * 80)
+    for method, perf in performance_analysis.items():
+        if method.lower().replace(' ', '') in [m.lower().replace(' ', '') for m in methods.keys()]:
+            print(f"{method:12} | {perf['accuracy']:8} | {perf['latency']:8} | "
+                  f"{perf['memory']:8} | {perf['realtime']:6} | {perf['use_case']}")
+    
+    # 6. 关键发现总结
+    print(f"\n🎯 关键发现总结")
+    print("-" * 60)
+    
+    findings = []
+    
+    # 检查是否所有方法检测到相同数量的语音段
+    segment_counts = [stats[method]['segment_count'] for method in stats.keys()]
+    if len(set(segment_counts)) == 1:
+        findings.append(f"✅ 所有方法检测到相同数量的语音段 ({segment_counts[0]}段)")
+    else:
+        findings.append(f"⚠️  不同方法检测到的语音段数量不一致: {dict(zip(stats.keys(), segment_counts))}")
+    
+    # 检查语音时长一致性
+    speech_durations = [stats[method]['total_speech_duration'] for method in stats.keys()]
+    duration_variance = max(speech_durations) - min(speech_durations)
+    if duration_variance < 1.0:  # 差异小于1秒
+        findings.append(f"✅ 语音时长检测高度一致 (差异 {duration_variance:.1f}s)")
+    else:
+        findings.append(f"⚠️  语音时长检测存在差异 (差异 {duration_variance:.1f}s)")
+    
+    # 检查流式处理修复效果
+    if 'Streaming' in stats and 'Batch' in stats:
+        if stats['Streaming']['segment_count'] == stats['Batch']['segment_count']:
+            findings.append("✅ 流式VAD最后一段缺失问题已修复")
+        else:
+            findings.append("❌ 流式VAD仍存在段数不一致问题")
+    
+    # 推荐使用场景
+    findings.append("💡 推荐使用场景:")
+    findings.append("   • 离线高精度处理 → Batch VAD")
+    findings.append("   • 实时字幕生成 → Streaming VAD") 
+    findings.append("   • 平衡方案 → Continuous VAD")
+    
+    for finding in findings:
+        print(f"   {finding}")
+    
+    print("\n" + "="*80)
 
     
 def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000, 
                                     threshold=0.3, min_silence_duration_ms=300, speech_pad_ms=100,
                                     no_audio_input_threshold=0.5):
     """
-    分析流式音频数据，使用FixedVADIterator
+    分析流式音频数据，使用面向对象的VACProcessor
     
     Args:
         audio_stream: 音频流迭代器
@@ -906,96 +1056,23 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
         speech_pad_ms: 语音段填充时间(ms)
         no_audio_input_threshold: 无音频输入阈值(秒)，超过此时间无新数据则强制结束
     """
-    import time
+    # 导入VAC处理器
+    from subtitle_genius.stream.vac_processor import VACProcessor
     
-    # 警告：提醒用户注意块大小问题
-    print(f"\n===== 流式VAD处理注意事项 =====")
-    print(f"为避免VAD时间戳膨胀问题，请确保音频流中的块大小是512的整数倍。")
-    print(f"详见文档：docs/VAD时间戳膨胀问题分析.md")
+    print(f"\n===== 使用面向对象的VACProcessor =====")
     
-    # 加载Silero VAD模型
-    model, _ = torch.hub.load(
-        repo_or_dir='snakers4/silero-vad',
-        model='silero_vad'
-    )
-    
-    # 创建VAD迭代器
-    vad = FixedVADIterator(
-        model=model,
+    # 创建VAC处理器
+    vac_processor = VACProcessor(
         threshold=threshold,
-        sampling_rate=sample_rate,
         min_silence_duration_ms=min_silence_duration_ms,
-        speech_pad_ms=speech_pad_ms
+        speech_pad_ms=speech_pad_ms,
+        sample_rate=sample_rate,
+        processing_chunk_size=512,
+        no_audio_input_threshold=no_audio_input_threshold
     )
     
-    # 处理音频块
-    processing_chunk_size = 512  # Silero VAD要求的确切大小
-    results = []
-    last_audio_time = time.time()
-    total_samples_processed = 0
-    stream_ended = False
-    
-    print(f"\n===== 流式处理音频 =====")
-    print(f"参数: threshold={threshold}, min_silence_duration_ms={min_silence_duration_ms}, speech_pad_ms={speech_pad_ms}")
-    print(f"无音频输入阈值: {no_audio_input_threshold} 秒")
-    
-    try:
-        # 处理流式音频
-        for audio_chunk in audio_stream:
-            # 更新最后接收音频的时间
-            last_audio_time = time.time()
-            
-            # 处理音频块
-            for i in range(0, len(audio_chunk), processing_chunk_size):
-                chunk = audio_chunk[i:i+processing_chunk_size]
-                
-                # 如果需要，用零填充
-                print(f"------->len of chunk is {len(chunk)} and processing chunk size is {processing_chunk_size}")
-                if len(chunk) < processing_chunk_size:
-                    chunk = np.pad(chunk, (0, processing_chunk_size - len(chunk)), 'constant')
-                
-                # 使用VAD迭代器处理块
-                result = vad(chunk, return_seconds=True)
-                
-                total_samples_processed += len(chunk)
-                
-                if result:
-                    print(f"---vad result is {result}")
-                    results.append(result)
-            
-            # 检查是否超过无音频输入阈值
-            if time.time() - last_audio_time > no_audio_input_threshold:
-                stream_ended = True
-                break
-        
-        # 标记流已结束
-        stream_ended = True
-        
-    except Exception as e:
-        print(f"流处理中断: {e}")
-        stream_ended = True
-    
-    # 🔧 修复：音频流结束时的处理
-    if stream_ended:
-        print(f"音频流已结束，正在进行最终处理...")
-        
-        # 如果VAD仍处于触发状态，强制结束当前语音段
-        if vad.triggered:
-            # 使用当前处理的总样本数计算结束时间
-            end_time = total_samples_processed / sample_rate
-            results.append({'end': end_time})
-            print(f"检测到未结束的语音段，强制结束于 {end_time:.2f}秒")
-        
-        # 强制刷新VAD状态，确保所有缓冲的结果都被输出
-        try:
-            # 发送一个静音块来触发任何待处理的结束事件
-            silent_chunk = np.zeros(processing_chunk_size, dtype=np.float32)
-            final_result = vad(silent_chunk, return_seconds=True)
-            if final_result:
-                print(f"最终刷新结果: {final_result}")
-                results.append(final_result)
-        except Exception as e:
-            print(f"最终刷新时出错: {e}")
+    # 处理流式音频，返回原始结果（不转换为segments）
+    results = vac_processor.process_streaming_audio(audio_stream, return_segments=False)
     
     return results
 
