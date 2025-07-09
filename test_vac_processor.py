@@ -933,6 +933,7 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
     results = []
     last_audio_time = time.time()
     total_samples_processed = 0
+    stream_ended = False
     
     print(f"\n===== 流式处理音频 =====")
     print(f"参数: threshold={threshold}, min_silence_duration_ms={min_silence_duration_ms}, speech_pad_ms={speech_pad_ms}")
@@ -964,20 +965,37 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
             
             # 检查是否超过无音频输入阈值
             if time.time() - last_audio_time > no_audio_input_threshold:
-                # 如果VAD仍处于触发状态，强制结束
-                if vad.triggered:
-                    # 使用当前处理的总样本数计算结束时间
-                    end_time = total_samples_processed / sample_rate
-                    results.append({'end': end_time})
-                    print(f"由于超过无音频输入阈值 {no_audio_input_threshold}秒，强制结束于 {end_time:.2f}秒")
+                stream_ended = True
                 break
+        
+        # 标记流已结束
+        stream_ended = True
+        
     except Exception as e:
         print(f"流处理中断: {e}")
-        # 如果VAD仍处于触发状态，强制结束
+        stream_ended = True
+    
+    # 🔧 修复：音频流结束时的处理
+    if stream_ended:
+        print(f"音频流已结束，正在进行最终处理...")
+        
+        # 如果VAD仍处于触发状态，强制结束当前语音段
         if vad.triggered:
+            # 使用当前处理的总样本数计算结束时间
             end_time = total_samples_processed / sample_rate
             results.append({'end': end_time})
-            print(f"由于异常中断，强制结束于 {end_time:.2f}秒")
+            print(f"检测到未结束的语音段，强制结束于 {end_time:.2f}秒")
+        
+        # 强制刷新VAD状态，确保所有缓冲的结果都被输出
+        try:
+            # 发送一个静音块来触发任何待处理的结束事件
+            silent_chunk = np.zeros(processing_chunk_size, dtype=np.float32)
+            final_result = vad(silent_chunk, return_seconds=True)
+            if final_result:
+                print(f"最终刷新结果: {final_result}")
+                results.append(final_result)
+        except Exception as e:
+            print(f"最终刷新时出错: {e}")
     
     return results
 
