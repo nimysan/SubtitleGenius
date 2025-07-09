@@ -64,6 +64,7 @@ dependencies = [
     "matplotlib>=3.10.3",
     "silero-vad>=5.1.2",
     "faster-whisper>=1.1.1",
+    "pypubsub>=4.0.3",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

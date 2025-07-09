@@ -2700,6 +2700,14 @@ wheels = [
 ]
 
 [[package]]
+name = "pypubsub"
+version = "4.0.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/1a/41/a0aceb552d8ec63bb1e8223d130f9dd0f736470036d75d708183b104a2cb/Pypubsub-4.0.3-py3-none-any.whl", hash = "sha256:7f716bae9388afe01ff82b264ba8a96a8ae78b42bb1f114f2716ca8f9e404e2a", size = 61368, upload-time = "2019-01-28T00:36:11.389Z" },
+]
+
+[[package]]
 name = "pyreadline3"
 version = "3.5.4"
 source = { registry = "https://pypi.org/simple" }
@@ -3286,6 +3294,7 @@ dependencies = [
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pydub" },
+    { name = "pypubsub" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
     { name = "requests" },
@@ -3348,6 +3357,7 @@ requires-dist = [
     { name = "pydantic", specifier = ">=2.5.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pydub", specifier = ">=0.25.1" },
+    { name = "pypubsub", specifier = ">=4.0.3" },
     { name = "pytest", marker = "extra == 'dev'", specifier = ">=7.4.3" },
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.21.0" },
     { name = "python-dotenv", specifier = ">=1.0.0" },

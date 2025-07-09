@@ -7,6 +7,7 @@ ensuring consistent VAD effects across the entire audio.
 
 import os
 import sys
+import time
 import numpy as np
 import soundfile as sf
 import torch
@@ -1160,6 +1161,206 @@ def test_streaming_vad(audio_file, chunk_duration=0.128, sample_rate=16000):
     return streaming_segments
 
 
+def test_speech_segment_events(audio_file="chinese_180s.wav", chunk_duration=0.128, sample_rate=16000):
+    """
+    测试语音段事件订阅功能
+    
+    Args:
+        audio_file: 音频文件路径
+        chunk_duration: 每个块的持续时间（秒）
+        sample_rate: 采样率
+    """
+    print("\n" + "="*80)
+    print("🎤 测试语音段事件订阅功能")
+    print("="*80)
+    
+    # 事件收集器
+    detected_segments = []
+    
+    def on_speech_segment_detected(speech_segment):
+        """
+        语音段检测事件回调函数
+        
+        Args:
+            speech_segment: 包含start、end、duration、audio_bytes、sample_rate的字典
+        """
+        print(f"🎯 检测到语音段:")
+        print(f"   时间范围: {speech_segment['start']:.2f}s - {speech_segment['end']:.2f}s")
+        print(f"   持续时间: {speech_segment['duration']:.2f}s")
+        print(f"   音频数据: {len(speech_segment['audio_bytes'])} bytes")
+        print(f"   采样率: {speech_segment['sample_rate']} Hz")
+        
+        # 计算音频数据的一些统计信息
+        audio_array = np.frombuffer(speech_segment['audio_bytes'], dtype=np.float32)
+        print(f"   音频样本数: {len(audio_array)}")
+        print(f"   音频RMS: {np.sqrt(np.mean(audio_array**2)):.4f}")
+        print(f"   音频峰值: {np.max(np.abs(audio_array)):.4f}")
+        
+        # 验证音频数据长度是否与时长匹配
+        expected_samples = int(speech_segment['duration'] * speech_segment['sample_rate'])
+        actual_samples = len(audio_array)
+        sample_diff = abs(expected_samples - actual_samples)
+        print(f"   样本数验证: 期望{expected_samples}, 实际{actual_samples}, 差异{sample_diff}")
+        
+        # 保存到收集器
+        detected_segments.append({
+            'start': speech_segment['start'],
+            'end': speech_segment['end'],
+            'duration': speech_segment['duration'],
+            'audio_bytes_length': len(speech_segment['audio_bytes']),
+            'audio_samples': len(audio_array),
+            'audio_rms': np.sqrt(np.mean(audio_array**2)),
+            'audio_peak': np.max(np.abs(audio_array)),
+            'sample_rate': speech_segment['sample_rate']
+        })
+        
+        print(f"   ✅ 事件处理完成 (总计已检测 {len(detected_segments)} 个语音段)")
+        print("-" * 60)
+    
+    # 加载音频文件
+    print(f"📁 加载音频文件: {audio_file}")
+    audio_data, file_sample_rate = sf.read(audio_file)
+    
+    # 确保音频是单声道
+    if len(audio_data.shape) > 1:
+        audio_data = audio_data[:, 0]
+        print("🔄 转换为单声道")
+    
+    # 确保音频是float32
+    if audio_data.dtype != np.float32:
+        audio_data = audio_data.astype(np.float32)
+        print("🔄 转换为float32格式")
+    
+    # 如果需要，重采样
+    if file_sample_rate != sample_rate:
+        import librosa
+        audio_data = librosa.resample(audio_data, orig_sr=file_sample_rate, target_sr=sample_rate)
+        print(f"🔄 重采样: {file_sample_rate}Hz → {sample_rate}Hz")
+    
+    print(f"📊 音频信息:")
+    print(f"   时长: {len(audio_data)/sample_rate:.2f}s")
+    print(f"   样本数: {len(audio_data)}")
+    print(f"   采样率: {sample_rate}Hz")
+    
+    # 计算每个块的样本数
+    chunk_size = int(chunk_duration * sample_rate)
+    
+    # 确保chunk_size是512的整数倍
+    VAD_CHUNK_SIZE = 512
+    if chunk_size % VAD_CHUNK_SIZE != 0:
+        # 自动调整到最近的512的整数倍
+        chunk_size = ((chunk_size // VAD_CHUNK_SIZE) + 1) * VAD_CHUNK_SIZE
+        chunk_duration = chunk_size / sample_rate
+        print(f"⚠️  自动调整chunk_size到512的整数倍: {chunk_size} (时长: {chunk_duration:.3f}s)")
+    
+    print(f"🔧 处理参数:")
+    print(f"   块大小: {chunk_size} 样本 ({chunk_duration:.3f}s)")
+    print(f"   VAD阈值: 0.3")
+    print(f"   最小静音时长: 300ms")
+    print(f"   语音填充: 100ms")
+    
+    # 创建一个生成器，模拟流式输入
+    def audio_stream_generator():
+        print(f"🚀 开始流式处理...")
+        for i in range(0, len(audio_data), chunk_size):
+            chunk = audio_data[i:min(i+chunk_size, len(audio_data))]
+            current_time = i / sample_rate
+            print(f"📦 处理音频块: {current_time:.2f}s - {(i+len(chunk))/sample_rate:.2f}s ({len(chunk)} 样本)")
+            yield chunk
+    
+    # 导入VAC处理器
+    from subtitle_genius.stream.vac_processor import VACProcessor
+    
+    # 创建带事件回调的VAC处理器
+    print(f"🏗️  创建VACProcessor...")
+    vac_processor = VACProcessor(
+        threshold=0.3,
+        min_silence_duration_ms=300,
+        speech_pad_ms=100,
+        sample_rate=sample_rate,
+        processing_chunk_size=512,
+        no_audio_input_threshold=0.5,
+        on_speech_segment=on_speech_segment_detected  # 🎯 关键：设置事件回调
+    )
+    
+    # 创建音频流
+    audio_stream = audio_stream_generator()
+    
+    # 开始处理
+    print(f"▶️  开始VAD处理...")
+    start_time = time.time()
+    
+    # 处理流式音频（这会触发事件回调）
+    vad_results = vac_processor.process_streaming_audio(audio_stream, return_segments=False)
+    
+    processing_time = time.time() - start_time
+    print(f"⏱️  处理完成，耗时: {processing_time:.2f}s")
+    
+    # 统计结果
+    print(f"\n📈 处理结果统计:")
+    print(f"   VAD原始事件数: {len(vad_results)}")
+    print(f"   检测到的语音段数: {len(detected_segments)}")
+    
+    if detected_segments:
+        total_speech_duration = sum(seg['duration'] for seg in detected_segments)
+        avg_duration = total_speech_duration / len(detected_segments)
+        max_duration = max(seg['duration'] for seg in detected_segments)
+        min_duration = min(seg['duration'] for seg in detected_segments)
+        
+        print(f"   总语音时长: {total_speech_duration:.2f}s")
+        print(f"   平均段长: {avg_duration:.2f}s")
+        print(f"   最长段: {max_duration:.2f}s")
+        print(f"   最短段: {min_duration:.2f}s")
+        print(f"   语音占比: {total_speech_duration/(len(audio_data)/sample_rate)*100:.1f}%")
+        
+        # 显示前几个检测到的语音段
+        print(f"\n📋 检测到的语音段详情 (前5个):")
+        print(f"{'#':<3} {'开始(s)':<8} {'结束(s)':<8} {'时长(s)':<8} {'音频(KB)':<10} {'RMS':<8} {'峰值':<8}")
+        print("-" * 70)
+        
+        for i, seg in enumerate(detected_segments[:5]):
+            audio_kb = seg['audio_bytes_length'] / 1024
+            print(f"{i+1:<3} {seg['start']:<8.2f} {seg['end']:<8.2f} {seg['duration']:<8.2f} "
+                  f"{audio_kb:<10.1f} {seg['audio_rms']:<8.4f} {seg['audio_peak']:<8.4f}")
+    
+    # 验证事件系统是否正常工作
+    print(f"\n✅ 事件系统验证:")
+    
+    # 计算预期的语音段数（从VAD原始结果）
+    expected_segments = 0
+    in_speech = False
+    for result in vad_results:
+        if 'start' in result:
+            in_speech = True
+        elif 'end' in result and in_speech:
+            expected_segments += 1
+            in_speech = False
+    
+    print(f"   预期语音段数: {expected_segments}")
+    print(f"   实际触发事件数: {len(detected_segments)}")
+    
+    if expected_segments == len(detected_segments):
+        print(f"   ✅ 事件系统工作正常！所有语音段都触发了事件")
+    else:
+        print(f"   ❌ 事件系统异常！预期{expected_segments}个事件，实际{len(detected_segments)}个")
+    
+    # 模拟whisper_sagemaker调用
+    print(f"\n🤖 模拟Whisper SageMaker调用:")
+    for i, seg in enumerate(detected_segments[:3]):  # 只模拟前3个
+        print(f"   📞 调用whisper_sagemaker.transcribe():")
+        print(f"      语音段 {i+1}: {seg['start']:.2f}s-{seg['end']:.2f}s")
+        print(f"      音频数据: {seg['audio_bytes_length']} bytes")
+        print(f"      → 这里会调用实际的转录服务")
+    
+    print(f"\n🎉 事件订阅测试完成！")
+    return detected_segments
+
+
 if __name__ == "__main__":
+    # 运行原有的主测试
     main()
+    
+    # 运行新的事件订阅测试
+    print("\n" + "="*100)
+    test_speech_segment_events()
 
