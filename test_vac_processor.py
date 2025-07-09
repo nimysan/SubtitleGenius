@@ -371,6 +371,7 @@ def analyze_with_fixed_vad_continuous(audio_data, sample_rate=16000,
     # Process the audio in chunks
     processing_chunk_size = 512  # Exact size required by Silero VAD
     results = []
+    last_chunk_index = (len(audio_data) - 1) // processing_chunk_size
     
     print(f"\n===== Processing audio with FixedVADIterator continuously =====")
     print(f"Parameters: threshold={threshold}, min_silence_duration_ms={min_silence_duration_ms}, speech_pad_ms={speech_pad_ms}")
@@ -380,6 +381,7 @@ def analyze_with_fixed_vad_continuous(audio_data, sample_rate=16000,
     # Process the entire audio continuously
     for i in tqdm(range(0, len(audio_data), processing_chunk_size), desc="Processing audio"):
         chunk = audio_data[i:i+processing_chunk_size]
+        is_last_chunk = (i // processing_chunk_size) == last_chunk_index
         
         # Pad with zeros if needed
         if len(chunk) < processing_chunk_size:
@@ -390,12 +392,23 @@ def analyze_with_fixed_vad_continuous(audio_data, sample_rate=16000,
         
         if result:
             results.append(result)
+        
+        # If this is the last chunk and VAD is still triggered, force an end
+        if is_last_chunk and vad.triggered:
+            results.append({'end': len(audio_data) / sample_rate})
+            print(f"Forced end at {len(audio_data) / sample_rate:.2f}s because audio ended while speech was active")
     
     return results
 
-def compare_vad_methods(batch_results, chunked_results, continuous_results):
+def compare_vad_methods(batch_results, chunked_results, continuous_results, streaming_results=None):
     """
     Compare different VAD processing methods
+    
+    Args:
+        batch_results: Results from batch VAD processing
+        chunked_results: Results from chunked VAD processing (仅用于计算重叠率，不在图中显示)
+        continuous_results: Results from continuous VAD processing
+        streaming_results: Results from streaming VAD processing (optional)
     """
     print("\n===== VAD 处理方法比较 =====")
     
@@ -416,8 +429,9 @@ def compare_vad_methods(batch_results, chunked_results, continuous_results):
     
     # Print comparison
     print(f"Batch VAD 检测到的语音段数量: {len(batch_results)}")
-    print(f"Chunked VAD 检测到的语音段数量: {len(chunked_results)}")
     print(f"Continuous VAD 检测到的语音段数量: {len(continuous_segments)}")
+    if streaming_results:
+        print(f"Streaming VAD 检测到的语音段数量: {len(streaming_results)}")
     
     # Print batch segments
     print("\nBatch VAD 语音段:")
@@ -428,10 +442,52 @@ def compare_vad_methods(batch_results, chunked_results, continuous_results):
         duration = segment['end'] - segment['start']
         print(f"{i+1:<5} {segment['start']:<15.2f} {segment['end']:<15.2f} {duration:<15.2f}")
     
-    # Print chunked segments
-    print("\nChunked VAD 语音段:")
+    # Print continuous segments
+    print("\nContinuous VAD 语音段:")
     print(f"{'#':<5} {'Start (s)':<15} {'End (s)':<15} {'Duration (s)':<15}")
     print("-" * 50)
+    
+    for i, segment in enumerate(continuous_segments):
+        print(f"{i+1:<5} {segment['start']:<15.2f} {segment['end']:<15.2f} {segment['duration']:<15.2f}")
+    
+    # Print streaming segments if available
+    if streaming_results:
+        print("\nStreaming VAD 语音段:")
+        print(f"{'#':<5} {'Start (s)':<15} {'End (s)':<15} {'Duration (s)':<15}")
+        print("-" * 50)
+        
+        for i, segment in enumerate(streaming_results):
+            duration = segment['end'] - segment['start']
+            print(f"{i+1:<5} {segment['start']:<15.2f} {segment['end']:<15.2f} {duration:<15.2f}")
+    
+    # Calculate overlap between batch and continuous
+    batch_continuous_overlap = calculate_overlap(batch_results, continuous_segments)
+    
+    print(f"\nBatch vs Continuous 重叠比例: {batch_continuous_overlap:.2%}")
+    
+    # Calculate overlap with streaming results if available
+    if streaming_results:
+        batch_streaming_overlap = calculate_overlap(batch_results, streaming_results)
+        continuous_streaming_overlap = calculate_overlap(continuous_segments, streaming_results)
+        
+        print(f"Batch vs Streaming 重叠比例: {batch_streaming_overlap:.2%}")
+        print(f"Continuous vs Streaming 重叠比例: {continuous_streaming_overlap:.2%}")
+    
+    # Compare total duration
+    batch_duration = sum(seg['end'] - seg['start'] for seg in batch_results)
+    continuous_duration = sum(seg['duration'] for seg in continuous_segments)
+    
+    print(f"\nBatch VAD 总语音时长: {batch_duration:.2f} 秒")
+    print(f"Continuous VAD 总语音时长: {continuous_duration:.2f} 秒")
+    
+    if streaming_results:
+        streaming_duration = sum(seg['end'] - seg['start'] for seg in streaming_results)
+        print(f"Streaming VAD 总语音时长: {streaming_duration:.2f} 秒")
+    
+    # Plot the segments for visual comparison
+    plot_segments_comparison(batch_results, chunked_results, continuous_segments, streaming_results)
+    
+    return continuous_segments
     
     for i, segment in enumerate(chunked_results):
         duration = segment['end'] - segment['start']
@@ -444,6 +500,16 @@ def compare_vad_methods(batch_results, chunked_results, continuous_results):
     
     for i, segment in enumerate(continuous_segments):
         print(f"{i+1:<5} {segment['start']:<15.2f} {segment['end']:<15.2f} {segment['duration']:<15.2f}")
+    
+    # Print streaming segments if available
+    if streaming_results:
+        print("\nStreaming VAD 语音段:")
+        print(f"{'#':<5} {'Start (s)':<15} {'End (s)':<15} {'Duration (s)':<15}")
+        print("-" * 50)
+        
+        for i, segment in enumerate(streaming_results):
+            duration = segment['end'] - segment['start']
+            print(f"{i+1:<5} {segment['start']:<15.2f} {segment['end']:<15.2f} {duration:<15.2f}")
     
     # Calculate overlap between batch and chunked
     batch_chunked_overlap = calculate_overlap(batch_results, chunked_results)
@@ -458,6 +524,16 @@ def compare_vad_methods(batch_results, chunked_results, continuous_results):
     print(f"Batch vs Continuous 重叠比例: {batch_continuous_overlap:.2%}")
     print(f"Chunked vs Continuous 重叠比例: {chunked_continuous_overlap:.2%}")
     
+    # Calculate overlap with streaming results if available
+    if streaming_results:
+        batch_streaming_overlap = calculate_overlap(batch_results, streaming_results)
+        chunked_streaming_overlap = calculate_overlap(chunked_results, streaming_results)
+        continuous_streaming_overlap = calculate_overlap(continuous_segments, streaming_results)
+        
+        print(f"Batch vs Streaming 重叠比例: {batch_streaming_overlap:.2%}")
+        print(f"Chunked vs Streaming 重叠比例: {chunked_streaming_overlap:.2%}")
+        print(f"Continuous vs Streaming 重叠比例: {continuous_streaming_overlap:.2%}")
+    
     # Compare total duration
     batch_duration = sum(seg['end'] - seg['start'] for seg in batch_results)
     chunked_duration = sum(seg['end'] - seg['start'] for seg in chunked_results)
@@ -467,8 +543,12 @@ def compare_vad_methods(batch_results, chunked_results, continuous_results):
     print(f"Chunked VAD 总语音时长: {chunked_duration:.2f} 秒")
     print(f"Continuous VAD 总语音时长: {continuous_duration:.2f} 秒")
     
+    if streaming_results:
+        streaming_duration = sum(seg['end'] - seg['start'] for seg in streaming_results)
+        print(f"Streaming VAD 总语音时长: {streaming_duration:.2f} 秒")
+    
     # Plot the segments for visual comparison
-    plot_segments_comparison(batch_results, chunked_results, continuous_segments)
+    plot_segments_comparison(batch_results, chunked_results, continuous_segments, streaming_results)
     
     return continuous_segments
 
@@ -494,11 +574,17 @@ def calculate_overlap(segments1, segments2):
     overlap_ratio = overlap_count / len(segments1) if segments1 else 0
     return overlap_ratio
 
-def plot_segments_comparison(batch_segments, chunked_segments, continuous_segments):
+def plot_segments_comparison(batch_segments, chunked_segments, continuous_segments, streaming_segments=None):
     """
     Plot segments from different VAD methods for visual comparison
+    
+    Args:
+        batch_segments: Segments from batch VAD processing
+        chunked_segments: Segments from chunked VAD processing (不在图中显示)
+        continuous_segments: Segments from continuous VAD processing
+        streaming_segments: Segments from streaming VAD processing (optional)
     """
-    plt.figure(figsize=(20, 8))
+    plt.figure(figsize=(20, 10 if streaming_segments else 8))
     
     # Plot audio waveform as background
     try:
@@ -509,48 +595,165 @@ def plot_segments_comparison(batch_segments, chunked_segments, continuous_segmen
         # Normalize and scale the waveform
         audio_data = audio_data / np.max(np.abs(audio_data)) * 0.3
         
+        # Calculate audio duration
+        audio_duration = len(audio_data) / sample_rate
+        
         # Plot waveform with transparency
         time_axis = np.arange(len(audio_data)) / sample_rate
-        plt.plot(time_axis, audio_data + 2, color='gray', alpha=0.5, linewidth=0.5)
+        plt.plot(time_axis, audio_data + (2 if streaming_segments else 1.5), color='gray', alpha=0.3, linewidth=0.5)
+        
+        print(f"音频时长: {audio_duration:.2f} 秒")
     except Exception as e:
-        print(f"Could not plot waveform: {e}")
+        print(f"无法绘制波形: {e}")
+        audio_duration = 180.0  # 如果无法读取音频文件，默认为180秒
     
-    # Plot batch segments
+    # 计算每种方法的y位置 (移除chunked)
+    y_positions = {}
+    if streaming_segments:
+        y_positions = {'batch': 3, 'continuous': 2, 'streaming': 1}
+    else:
+        y_positions = {'batch': 2, 'continuous': 1}
+    
+    # 为每种方法创建垂直偏移字典，用于避免重叠
+    vertical_offsets = {'batch': {}, 'continuous': {}, 'streaming': {}}
+    
+    # 找出所有段的最大结束时间，用于设置x轴范围
+    max_end_time = 0
+    
+    # 创建更小的时间区间以更好地处理重叠
+    bin_size = 3  # 3秒的区间
+    
+    # 计算批处理段的垂直偏移
+    for segment in batch_segments:
+        start_bin = int(segment['start'] / bin_size)
+        if start_bin not in vertical_offsets['batch']:
+            vertical_offsets['batch'][start_bin] = 0
+        else:
+            vertical_offsets['batch'][start_bin] += 0.15  # 增加垂直偏移
+    
+    # 绘制批处理段
     for i, segment in enumerate(batch_segments):
-        plt.plot([segment['start'], segment['end']], [3, 3], 'b-', linewidth=6)
-        plt.text((segment['start'] + segment['end']) / 2, 3.1, 
-                 f"{segment['end'] - segment['start']:.1f}s", 
-                 ha='center', fontsize=8)
+        start_bin = int(segment['start'] / bin_size)
+        offset = vertical_offsets['batch'][start_bin]
+        y_pos = y_positions['batch'] + offset
+        
+        plt.plot([segment['start'], segment['end']], [y_pos, y_pos], 'b-', linewidth=3)
+        
+        # 只为较长的段添加时长标签，避免拥挤
+        duration = segment['end'] - segment['start']
+        if duration > 1.0:  # 只为超过1秒的段添加标签
+            plt.text((segment['start'] + segment['end']) / 2, y_pos + 0.1, 
+                    f"{duration:.1f}s", 
+                    ha='center', fontsize=7)
+        
+        max_end_time = max(max_end_time, segment['end'])
+        
+        # 减少该区间的偏移量，为下一个段做准备
+        vertical_offsets['batch'][start_bin] -= 0.15
     
-    # Plot chunked segments
-    for i, segment in enumerate(chunked_segments):
-        if 'end' in segment and 'start' in segment and segment['end'] > segment['start']:
-            plt.plot([segment['start'], segment['end']], [2, 2], 'r-', linewidth=6)
-            plt.text((segment['start'] + segment['end']) / 2, 2.1, 
-                     f"{segment['end'] - segment['start']:.1f}s", 
-                     ha='center', fontsize=8)
+    # 计算连续处理段的垂直偏移
+    for segment in continuous_segments:
+        if 'start' in segment and 'end' in segment:
+            start_bin = int(segment['start'] / bin_size)
+            if start_bin not in vertical_offsets['continuous']:
+                vertical_offsets['continuous'][start_bin] = 0
+            else:
+                vertical_offsets['continuous'][start_bin] += 0.15
     
-    # Plot continuous segments
+    # 绘制连续处理段
     for i, segment in enumerate(continuous_segments):
-        plt.plot([segment['start'], segment['end']], [1, 1], 'g-', linewidth=6)
-        plt.text((segment['start'] + segment['end']) / 2, 1.1, 
-                 f"{segment['duration']:.1f}s", 
-                 ha='center', fontsize=8)
+        if 'start' in segment and 'end' in segment:
+            start_bin = int(segment['start'] / bin_size)
+            offset = vertical_offsets['continuous'][start_bin]
+            y_pos = y_positions['continuous'] + offset
+            
+            plt.plot([segment['start'], segment['end']], [y_pos, y_pos], 'g-', linewidth=3)
+            
+            # 只为较长的段添加时长标签
+            duration = segment['end'] - segment['start']
+            if duration > 1.0:
+                plt.text((segment['start'] + segment['end']) / 2, y_pos + 0.1, 
+                        f"{duration:.1f}s", 
+                        ha='center', fontsize=7)
+            
+            max_end_time = max(max_end_time, segment['end'])
+            
+            # 减少该区间的偏移量
+            vertical_offsets['continuous'][start_bin] -= 0.15
     
-    # Add vertical grid lines every 5 seconds
-    for i in range(0, 95, 5):
+    # 如果有流式处理段，则绘制
+    if streaming_segments:
+        # 检查流式段的格式
+        print(f"流式段数量: {len(streaming_segments)}")
+        for i, segment in enumerate(streaming_segments[:5]):  # 打印前5个段的信息，用于调试
+            print(f"流式段 {i+1}: {segment}")
+        
+        # 计算流式处理段的垂直偏移
+        for segment in streaming_segments:
+            if 'start' in segment and 'end' in segment:
+                start_bin = int(segment['start'] / bin_size)
+                if start_bin not in vertical_offsets['streaming']:
+                    vertical_offsets['streaming'][start_bin] = 0
+                else:
+                    vertical_offsets['streaming'][start_bin] += 0.15
+        
+        for i, segment in enumerate(streaming_segments):
+            # 确保流式段有正确的开始和结束时间
+            if 'start' in segment and 'end' in segment:
+                # 确保时间戳是有效的数值
+                start = float(segment['start'])
+                end = float(segment['end'])
+                
+                start_bin = int(start / bin_size)
+                offset = vertical_offsets['streaming'][start_bin]
+                y_pos = y_positions['streaming'] + offset
+                
+                # 绘制段
+                plt.plot([start, end], [y_pos, y_pos], 'y-', linewidth=3)
+                
+                # 添加时长标签
+                duration = end - start
+                plt.text((start + end) / 2, y_pos + 0.1, 
+                        f"{duration:.1f}s", 
+                        ha='center', fontsize=7)
+                
+                # 更新最大结束时间
+                max_end_time = max(max_end_time, end)
+                
+                # 减少该区间的偏移量
+                vertical_offsets['streaming'][start_bin] -= 0.15
+    
+    # 确保max_end_time不为零，并添加一些填充
+    max_end_time = max(max_end_time, audio_duration)
+    max_end_time = max_end_time * 1.05  # 添加5%的填充
+    
+    # 每10秒添加一条垂直网格线
+    grid_interval = 10  # 秒
+    for i in range(0, int(max_end_time) + grid_interval, grid_interval):
         plt.axvline(x=i, color='gray', linestyle='--', alpha=0.3)
         plt.text(i, 0.5, f"{i}s", ha='center', fontsize=8)
     
-    plt.yticks([1, 2, 3], ['Continuous', 'Chunked', 'Batch'])
+    # 根据可用方法设置y刻度 (移除chunked)
+    if streaming_segments:
+        plt.yticks([1, 2, 3], ['Streaming', 'Continuous', 'Batch'])
+    else:
+        plt.yticks([1, 2], ['Continuous', 'Batch'])
+    
+    # 添加图例
+    plt.plot([], [], 'b-', linewidth=3, label='Batch VAD')
+    plt.plot([], [], 'g-', linewidth=3, label='Continuous VAD')
+    if streaming_segments:
+        plt.plot([], [], 'y-', linewidth=3, label='Streaming VAD')
+    plt.legend(loc='upper right')
+    
     plt.xlabel('Time (seconds)')
     plt.title('VAD Segment Comparison')
     plt.grid(True, axis='x', alpha=0.3)
-    plt.xlim(0, 95)  # Set x-axis limits
-    plt.ylim(0.5, 3.5)  # Set y-axis limits
+    plt.xlim(0, max_end_time)  # 根据实际数据设置x轴范围
+    plt.ylim(0.5, 4.0 if streaming_segments else 3.0)  # 设置y轴范围，增加空间以容纳垂直偏移
     plt.tight_layout()
     plt.savefig('vad_comparison.png', dpi=150)
-    print(f"VAD comparison plot saved to vad_comparison.png")
+    print(f"VAD比较图已保存到vad_comparison.png")
 
 def test_different_chunk_sizes(audio_data, sample_rate=16000, batch_results=None):
     """
@@ -631,8 +834,11 @@ def main():
         speech_pad_ms=speech_pad_ms
     )
     
+    
+    streaming_results = test_streaming_vad(audio_file, 0.5)
+    
     # Compare VAD methods and get processed continuous segments
-    continuous_segments = compare_vad_methods(batch_results, best_chunked_results, continuous_results)
+    continuous_segments = compare_vad_methods(batch_results, best_chunked_results, continuous_results, streaming_results)
     
     # Print key findings
     print("\n===== 关键发现 =====")
@@ -699,5 +905,159 @@ def main():
     print(f"4. 对于实时性要求高的场景，可以考虑使用 {min(5, best_chunk_size)} 秒的分块大小")
     print(f"5. 对于准确性要求高的场景，可以考虑使用 {max(10, best_chunk_size)} 秒的分块大小")
 
+
+    
+def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000, 
+                                    threshold=0.3, min_silence_duration_ms=300, speech_pad_ms=100,
+                                    no_audio_input_threshold=0.5):
+    """
+    分析流式音频数据，使用FixedVADIterator
+    
+    Args:
+        audio_stream: 音频流迭代器
+        sample_rate: 采样率
+        threshold: 语音阈值 (0.0-1.0)
+        min_silence_duration_ms: 最小静音持续时间(ms)
+        speech_pad_ms: 语音段填充时间(ms)
+        no_audio_input_threshold: 无音频输入阈值(秒)，超过此时间无新数据则强制结束
+    """
+    import time
+    
+    # 加载Silero VAD模型
+    model, _ = torch.hub.load(
+        repo_or_dir='snakers4/silero-vad',
+        model='silero_vad'
+    )
+    
+    # 创建VAD迭代器
+    vad = FixedVADIterator(
+        model=model,
+        threshold=threshold,
+        sampling_rate=sample_rate,
+        min_silence_duration_ms=min_silence_duration_ms,
+        speech_pad_ms=speech_pad_ms
+    )
+    
+    # 处理音频块
+    processing_chunk_size = 512  # Silero VAD要求的确切大小
+    results = []
+    last_audio_time = time.time()
+    total_samples_processed = 0
+    
+    print(f"\n===== 流式处理音频 =====")
+    print(f"参数: threshold={threshold}, min_silence_duration_ms={min_silence_duration_ms}, speech_pad_ms={speech_pad_ms}")
+    print(f"无音频输入阈值: {no_audio_input_threshold} 秒")
+    
+    try:
+        # 处理流式音频
+        for audio_chunk in audio_stream:
+            # 更新最后接收音频的时间
+            last_audio_time = time.time()
+            
+            # 处理音频块
+            for i in range(0, len(audio_chunk), processing_chunk_size):
+                chunk = audio_chunk[i:i+processing_chunk_size]
+                
+                # 如果需要，用零填充
+                if len(chunk) < processing_chunk_size:
+                    chunk = np.pad(chunk, (0, processing_chunk_size - len(chunk)), 'constant')
+                
+                # 使用VAD迭代器处理块
+                result = vad(chunk, return_seconds=True)
+                total_samples_processed += len(chunk)
+                
+                if result:
+                    results.append(result)
+            
+            # 检查是否超过无音频输入阈值
+            if time.time() - last_audio_time > no_audio_input_threshold:
+                # 如果VAD仍处于触发状态，强制结束
+                if vad.triggered:
+                    # 使用当前处理的总样本数计算结束时间
+                    end_time = total_samples_processed / sample_rate
+                    results.append({'end': end_time})
+                    print(f"由于超过无音频输入阈值 {no_audio_input_threshold}秒，强制结束于 {end_time:.2f}秒")
+                break
+    except Exception as e:
+        print(f"流处理中断: {e}")
+        # 如果VAD仍处于触发状态，强制结束
+        if vad.triggered:
+            end_time = total_samples_processed / sample_rate
+            results.append({'end': end_time})
+            print(f"由于异常中断，强制结束于 {end_time:.2f}秒")
+    
+    return results
+
+
+def test_streaming_vad(audio_file, chunk_duration=1.0, sample_rate=16000):
+    """
+    测试流式VAD处理
+    
+    Args:
+        audio_file: 音频文件路径
+        chunk_duration: 每个块的持续时间（秒）
+        sample_rate: 采样率
+    """
+    import time
+    
+    # 加载音频文件
+    audio_data, file_sample_rate = sf.read(audio_file)
+    
+    # 确保音频是单声道
+    if len(audio_data.shape) > 1:
+        audio_data = audio_data[:, 0]
+    
+    # 确保音频是float32
+    if audio_data.dtype != np.float32:
+        audio_data = audio_data.astype(np.float32)
+    
+    # 如果需要，重采样
+    if file_sample_rate != sample_rate:
+        import librosa
+        audio_data = librosa.resample(audio_data, orig_sr=file_sample_rate, target_sr=sample_rate)
+    
+    # 计算每个块的样本数
+    chunk_size = int(chunk_duration * sample_rate)
+    
+    # 创建一个生成器，模拟流式输入
+    def audio_stream_generator():
+        for i in range(0, len(audio_data), chunk_size):
+            chunk = audio_data[i:min(i+chunk_size, len(audio_data))]
+            yield chunk
+            # 模拟处理延迟
+            # time.sleep(0.1)
+    
+    # 创建音频流
+    audio_stream = audio_stream_generator()
+    
+    # 使用流式VAD处理
+    streaming_results = analyze_with_fixed_vad_streaming(
+        audio_stream,
+        sample_rate=sample_rate,
+        threshold=0.3,
+        min_silence_duration_ms=300,
+        speech_pad_ms=100,
+        no_audio_input_threshold=0.5
+    )
+    
+    # 转换结果为语音段
+    streaming_segments = []
+    start_time = None
+    
+    for result in streaming_results:
+        if 'start' in result:
+            start_time = result['start']
+        elif 'end' in result and start_time is not None:
+            streaming_segments.append({
+                'start': start_time,
+                'end': result['end'],
+                'duration': result['end'] - start_time
+            })
+            start_time = None
+    
+    return streaming_segments
+
+
 if __name__ == "__main__":
     main()
+
