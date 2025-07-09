@@ -762,7 +762,7 @@ def test_different_chunk_sizes(audio_data, sample_rate=16000, batch_results=None
     print("\n===== 测试不同的分块大小 =====")
     
     # Define chunk sizes to test (in seconds)
-    chunk_sizes = [1,3, 5, 7,10]
+    chunk_sizes = [3]
     
     best_chunk_size = None
     best_overlap = 0
@@ -834,8 +834,8 @@ def main():
         speech_pad_ms=speech_pad_ms
     )
     
-    
-    streaming_results = test_streaming_vad(audio_file, 0.5)
+    print("\n===== test_streaming_vad =====")
+    streaming_results = test_streaming_vad(audio_file, 0.128)
     
     # Compare VAD methods and get processed continuous segments
     continuous_segments = compare_vad_methods(batch_results, best_chunked_results, continuous_results, streaming_results)
@@ -889,21 +889,6 @@ def main():
     print(f"- Batch: {batch_avg_duration:.2f} 秒")
     print(f"- Chunked ({best_chunk_size}s): {chunked_avg_duration:.2f} 秒")
     print(f"- Continuous: {continuous_avg_duration:.2f} 秒")
-    
-    print("\n===== VAC处理器建议 =====")
-    print(f"1. 推荐使用 {best_chunk_size} 秒的分块大小进行VAC处理")
-    print(f"2. 使用参数: threshold={threshold}, min_silence_duration_ms={min_silence_duration_ms}, speech_pad_ms={speech_pad_ms}")
-    print(f"3. 预期每个分块会产生 {len(best_chunked_results)/num_chunks:.1f} 个语音段")
-    print(f"4. 平均语音段长度约为 {chunked_avg_duration:.1f} 秒")
-    print(f"5. 与批处理相比，分块处理的重叠率为 {calculate_overlap(batch_results, best_chunked_results)*100:.1f}%")
-    print(f"6. 分块处理的总语音时长与批处理相差 {abs(batch_duration - chunked_duration):.2f} 秒 ({abs(batch_duration - chunked_duration) / batch_duration * 100 if batch_duration > 0 else 0:.1f}%)")
-    
-    print("\n===== 实际应用建议 =====")
-    print(f"1. 对于 {len(audio_data)/sample_rate:.1f} 秒的音频，使用 {best_chunk_size} 秒分块，共需处理 {num_chunks} 个分块")
-    print(f"2. 每个分块的处理延迟约为 {best_chunk_size/2:.1f} 秒 (平均延迟)")
-    print(f"3. 建议在实际应用中使用重叠分块，每个分块重叠 0.5-1 秒，以避免语音段在分块边界被截断")
-    print(f"4. 对于实时性要求高的场景，可以考虑使用 {min(5, best_chunk_size)} 秒的分块大小")
-    print(f"5. 对于准确性要求高的场景，可以考虑使用 {max(10, best_chunk_size)} 秒的分块大小")
 
 
     
@@ -959,14 +944,17 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
                 chunk = audio_chunk[i:i+processing_chunk_size]
                 
                 # 如果需要，用零填充
+                print(f"------->len of chunk is {len(chunk)} and processing chunk size is {processing_chunk_size}")
                 if len(chunk) < processing_chunk_size:
                     chunk = np.pad(chunk, (0, processing_chunk_size - len(chunk)), 'constant')
                 
                 # 使用VAD迭代器处理块
                 result = vad(chunk, return_seconds=True)
+                
                 total_samples_processed += len(chunk)
                 
                 if result:
+                    print(f"---vad result is {result}")
                     results.append(result)
             
             # 检查是否超过无音频输入阈值
@@ -989,7 +977,7 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
     return results
 
 
-def test_streaming_vad(audio_file, chunk_duration=1.0, sample_rate=16000):
+def test_streaming_vad(audio_file, chunk_duration=0.128, sample_rate=16000):
     """
     测试流式VAD处理
     
@@ -1017,7 +1005,9 @@ def test_streaming_vad(audio_file, chunk_duration=1.0, sample_rate=16000):
         audio_data = librosa.resample(audio_data, orig_sr=file_sample_rate, target_sr=sample_rate)
     
     # 计算每个块的样本数
-    chunk_size = int(chunk_duration * sample_rate)
+    # 将chunk_size设置为512的整数倍，例如chunk_size = 1536（3*512）或chunk_size = 2048（4*512）
+    chunk_size = int(chunk_duration * sample_rate) # 如果chunk_size不是512的整数倍，例如chunk_size = 3*512 + 64 = 1600 Pad会导致时间超出
+    
     
     # 创建一个生成器，模拟流式输入
     def audio_stream_generator():
