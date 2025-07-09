@@ -151,8 +151,8 @@ async def websocket_whisper_endpoint(
     
     # 重置VAC处理器状态
     if vac_processor:
-        vac_processor.reset()
-    logger.info("VAC处理器已重置")
+        vac_processor.reset_vad_state()
+        logger.info("VAC处理器已重置")
     
     # 如果没有提供文件名，使用时间戳
     if not filename:

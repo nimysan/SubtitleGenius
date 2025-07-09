@@ -31,7 +31,7 @@ class VACProcessor:
         speech_pad_ms: int = 100,
         sample_rate: int = 16000,
         processing_chunk_size: int = 512,
-        no_audio_input_threshold: float = 0.5,
+        no_audio_input_threshold: float = 5,
         on_speech_segment: Optional[Callable[[Dict[str, Any]], None]] = None
     ):
         """
@@ -112,6 +112,7 @@ class VACProcessor:
     def process_streaming_audio(
         self, 
         audio_stream: Iterator[np.ndarray],
+        end_stream_flag: True,
         return_segments: bool = True
     ) -> List[Dict[str, Any]]:
         """
@@ -230,7 +231,8 @@ class VACProcessor:
                     break
             
             # 标记流已结束
-            stream_ended = True
+            if end_stream_flag is True:
+                stream_ended = True
             
         except Exception as e:
             print(f"流处理中断: {e}")

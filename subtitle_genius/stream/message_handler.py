@@ -188,119 +188,77 @@ class MessageHandler:
             print(f"音频数据: 形状={audio_data.shape}, 类型={audio_data.dtype}")
             print(f"采样率: {sample_rate} Hz")
             print(f"音频时长: {len(audio_data)}长度")
-            # 将音频数据添加到VAC处理器的连续缓冲区
-            if not self.vac_processor.add_audio_chunk(binary_data):
-                logger.warning("添加音频数据到VAC处理器失败")
-                return None
             
-            # 获取VAC处理器的缓冲区统计信息
-            buffer_stats = self.vac_processor.get_buffer_stats()
-            logger.debug(f"VAC缓冲区统计: {buffer_stats}")
+            # 调整VAC处理器参数，使其更容易检测到语音
+            # 降低阈值，减少最小静音持续时间
+            original_threshold = self.vac_processor.threshold
+            original_min_silence = self.vac_processor.min_silence_duration_ms
             
-                        # 将音频数据转换为numpy数组
-                 # 转换为与sf.read()相同的格式
+            # 临时调整参数以提高灵敏度
+            self.vac_processor.threshold = 0.2  # 降低阈值，使其更容易检测到语音
+            self.vac_processor.min_silence_duration_ms = 200  # 减少最小静音持续时间
             
+            print(f"调整VAC处理器参数: 阈值={self.vac_processor.threshold}, 最小静音持续时间={self.vac_processor.min_silence_duration_ms}ms")
             
-            # 检查是否有待处理的语音段
-            results = []
+            # 定义语音段检测回调函数
+            detected_segments = []
             
-            # 处理所有待处理的语音段
-            while self.vac_processor.has_pending_segments():
-                # 获取下一个语音段
-                segment = self.vac_processor.get_next_voice_segment()
-                if not segment:
-                    break
-                
-                audio_data, segment_start_time, segment_end_time = segment
-                
-                # 创建时间戳信息
-                segment_timestamp = {
-                    'chunk_index': current_chunk_index,
-                    'start_time': segment_start_time - self.vac_processor.continuous_buffer_start_time if self.vac_processor.continuous_buffer_start_time else segment_start_time,
-                    'end_time': segment_end_time - self.vac_processor.continuous_buffer_start_time if self.vac_processor.continuous_buffer_start_time else segment_end_time,
-                    'duration': segment_end_time - segment_start_time,
-                    'total_samples_processed': len(audio_data),
-                    'audio_start_time': segment_start_time - self.vac_processor.continuous_buffer_start_time if self.vac_processor.continuous_buffer_start_time else segment_start_time,
-                    'processing_start_time': time.time(),
-                    'current_time': time.time(),
-                    'is_relative_time': True  # 标记为相对时间
-                }
-                
-                # 记录音频数据信息
-                audio_duration = len(audio_data) / self.vac_processor.SAMPLING_RATE
-                
-                logger.info("=====> 传入SageMaker Transcribe的语音段:")
-                logger.info(f"=====> 音频长度: {len(audio_data)} 样本, {audio_duration:.2f} 秒")
-                logger.info(f"=====> 时间范围: start={segment_start_time:.2f}s, end={segment_end_time:.2f}s")
-                logger.info(f"=====> Chunk索引: {current_chunk_index}")
-                
-                # 将关键参数单独打印到segments.log文件
-                with open('segments.log', 'a') as f:
-                    f.write(f"SEGMENT: chunk_index={current_chunk_index}, audio_length={len(audio_data)}, duration={audio_duration:.2f}s, start={segment_start_time:.2f}s, end={segment_end_time:.2f}s, relative_start={(segment_start_time - self.vac_processor.continuous_buffer_start_time if self.vac_processor.continuous_buffer_start_time else segment_start_time):.2f}s, relative_end={(segment_end_time - self.vac_processor.continuous_buffer_start_time if self.vac_processor.continuous_buffer_start_time else segment_end_time):.2f}s\n")
-                
-                # 创建异步生成器
-                async def audio_generator():
-                    logger.info(f"=====> 生成音频数据: {len(audio_data)} 样本, {audio_duration:.2f} 秒")
-                    yield audio_data
-                
-                # 使用模型处理音频
-                if self.whisper_model and self.whisper_model.is_available():
-                    logger.info("开始使用Whisper模型处理语音段...")
-                    # 为当前语言更新模型配置
-                    await self.update_whisper_model_language(language)
-                    
-                    # 记录处理开始时间
-                    process_start_time = time.time()
-                    logger.info(f"=====> 开始处理音频: {process_start_time:.2f}s")
-                    
-                    async for subtitle in self.whisper_model.transcribe_stream(
-                        audio_generator(), language=language
-                    ):
-                        # 记录处理结束时间
-                        process_end_time = time.time()
-                        process_duration = process_end_time - process_start_time
-                        logger.info(f"=====> 音频处理完成: 耗时 {process_duration:.2f}s")
-                        logger.info(f"=====> 识别结果: '{subtitle.text}'")
-                        
-                        # 应用时间戳到字幕
-                        subtitle = await self.subtitle_processor.apply_timestamp_to_subtitle(subtitle, segment_timestamp)
-                        logger.info(f"应用时间戳到字幕: start={subtitle.start:.2f}s, end={subtitle.end:.2f}s")
-                        
-                        # 处理字幕（纠错和翻译）
-                        result = await self.subtitle_processor.process_subtitle(
-                            subtitle, client_id, 
-                            language=language,
-                            enable_correction=enable_correction,
-                            enable_translation=enable_translation,
-                            target_language=target_language
-                        )
-                        
-                        # 添加到结果列表
-                        if result:
-                            if result.get("type") == "split_subtitles":
-                                # 如果是拆分字幕，添加所有拆分结果
-                                results.extend(result.get("subtitles", []))
-                            else:
-                                # 单个字幕结果
-                                results.append(result)
-                else:
-                    logger.warning("Whisper模型不可用")
-                    return {
-                        "type": "error",
-                        "message": "Whisper模型不可用"
-                    }
+            def on_speech_segment(segment):
+                """语音段检测回调函数"""
+                print(f"检测到完整语音段: 开始={segment['start']:.3f}s, 结束={segment['end']:.3f}s, 时长={segment['duration']:.3f}s")
+                # 保存检测到的语音段
+                detected_segments.append({
+                    'start': segment['start'],
+                    'end': segment['end'],
+                    'duration': segment['duration']
+                })
             
-            # 如果有处理结果，返回
-            if results:
+            # 设置回调函数
+            self.vac_processor.on_speech_segment = on_speech_segment
+            
+            # 将单个音频数据转换为迭代器，以便传递给process_streaming_audio
+            def audio_stream_generator():
+                # 打印音频数据的统计信息，帮助调试
+                print(f"音频数据统计: 最小值={np.min(audio_data):.4f}, 最大值={np.max(audio_data):.4f}, 均值={np.mean(audio_data):.4f}, 标准差={np.std(audio_data):.4f}")
+                
+                # 检查音频数据是否包含语音（简单检查：是否有足够的变化）
+                if np.std(audio_data) < 0.01:
+                    print("警告: 音频数据变化很小，可能不包含语音")
+                
+                yield audio_data
+            
+            # 创建音频流迭代器
+            audio_stream = audio_stream_generator()
+            
+            # 调用vac_processor.process_streaming_audio处理音频数据
+            # 设置end_stream_flag为False，避免立即结束流
+            print("开始处理音频流...")
+            self.vac_processor.process_streaming_audio(
+                audio_stream=audio_stream,
+                end_stream_flag=False,  # 不立即结束流
+                return_segments=False  # 不需要返回段，因为我们使用回调函数
+            )
+            print("音频流处理完成")
+            
+            # 恢复原始参数
+            self.vac_processor.threshold = original_threshold
+            self.vac_processor.min_silence_duration_ms = original_min_silence
+            
+            # 返回处理结果
+            if detected_segments:
+                print(f"总共检测到 {len(detected_segments)} 个语音段")
                 return {
                     "type": "audio_processed",
-                    "status": "success",
-                    "chunk_index": current_chunk_index,
-                    "results": results
+                    "segments": detected_segments,
+                    "count": len(detected_segments)
                 }
             else:
-                # 如果没有处理结果，但有音频数据添加成功，返回None表示正在累积数据
-                return None
+                print("未检测到语音段")
+                return {
+                    "type": "audio_processed",
+                    "segments": [],
+                    "count": 0
+                }
                 
         except Exception as e:
             logger.error(f"处理音频数据失败: {e}")
