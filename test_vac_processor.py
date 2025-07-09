@@ -908,6 +908,11 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
     """
     import time
     
+    # 警告：提醒用户注意块大小问题
+    print(f"\n===== 流式VAD处理注意事项 =====")
+    print(f"为避免VAD时间戳膨胀问题，请确保音频流中的块大小是512的整数倍。")
+    print(f"详见文档：docs/VAD时间戳膨胀问题分析.md")
+    
     # 加载Silero VAD模型
     model, _ = torch.hub.load(
         repo_or_dir='snakers4/silero-vad',
@@ -985,6 +990,9 @@ def test_streaming_vad(audio_file, chunk_duration=0.128, sample_rate=16000):
         audio_file: 音频文件路径
         chunk_duration: 每个块的持续时间（秒）
         sample_rate: 采样率
+        
+    Returns:
+        list: 包含语音段信息的列表，每个段都有start、end和duration字段
     """
     import time
     
@@ -1006,7 +1014,16 @@ def test_streaming_vad(audio_file, chunk_duration=0.128, sample_rate=16000):
     
     # 计算每个块的样本数
     # 将chunk_size设置为512的整数倍，例如chunk_size = 1536（3*512）或chunk_size = 2048（4*512）
-    chunk_size = int(chunk_duration * sample_rate) # 如果chunk_size不是512的整数倍，例如chunk_size = 3*512 + 64 = 1600 Pad会导致时间超出
+    chunk_size = int(chunk_duration * sample_rate)
+    
+    # 强制检查：确保chunk_size是512的整数倍
+    VAD_CHUNK_SIZE = 512  # Silero VAD要求的块大小
+    if chunk_size % VAD_CHUNK_SIZE != 0:
+        raise ValueError(
+            f"chunk_size必须是{VAD_CHUNK_SIZE}的整数倍！当前值为{chunk_size}。"
+            f"请调整chunk_duration为{VAD_CHUNK_SIZE/sample_rate}的整数倍，"
+            f"例如{VAD_CHUNK_SIZE/sample_rate*3}秒或{VAD_CHUNK_SIZE/sample_rate*4}秒。"
+        )
     
     
     # 创建一个生成器，模拟流式输入
