@@ -3,39 +3,27 @@
 import asyncio
 import json
 import logging
-import numpy as np
+import os
+import uuid
+import datetime
+import tempfile
+from pathlib import Path
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
 from fastapi.middleware.cors import CORSMiddleware
 from typing import Dict, List, Optional, Any
-import uuid
-from pathlib import Path
-import tempfile
-import os
-import datetime
-import time
 from dotenv import load_dotenv
-import soundfile
-import io
-import torch
-import librosa
-
-# 导入VAC相关模块
-from whisper_streaming.silero_vad_iterator import FixedVADIterator
 
 # 加载环境变量
 load_dotenv()
 
+# 导入自定义模块
+from .vac_processor import VACProcessor
+from .subtitle_processor import SubtitleProcessor
+from .message_handler import MessageHandler
 from ..audio.processor import AudioProcessor
 from ..models.transcribe_model import TranscribeModel
 from ..models.whisper_sagemaker_streaming import WhisperSageMakerStreamConfig
-from ..models.whisper_language_config import (
-    create_whisper_config, 
-    get_sagemaker_whisper_params,
-    get_correction_scene_description
-)
-from ..models.claude_model import ClaudeModel
-from ..subtitle.models import Subtitle
-from ..correction import BedrockCorrectionService, CorrectionInput
+from ..correction import BedrockCorrectionService
 from translation_service import translation_manager
 
 # 配置日志
@@ -54,23 +42,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# 活跃连接管理
-active_connections: Dict[str, WebSocket] = {}
-
-# 字幕存储 - 为每个客户端存储字幕列表
-client_subtitles: Dict[str, List[Subtitle]] = {}
-
-# 时间戳存储 - 为每个客户端存储时间戳信息
-client_timestamps: Dict[str, Dict] = {}
-
-# 音频处理器
-audio_processor = AudioProcessor()
-
-# 模型实例
-sagemaker_whisper_model = None
-correction_service = None
-
-
 # SageMaker Whisper 配置
 SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT", "endpoint-quick-start-z9afg")
 AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
@@ -84,192 +55,18 @@ os.makedirs(temp_dir, exist_ok=True)
 subtitle_dir = Path("./subtitles")
 os.makedirs(subtitle_dir, exist_ok=True)
 
-# 音频处理常量
-SAMPLING_RATE = 16000
-min_chunk = 0.04
-
-# VAC处理器类
-class VACProcessor:
-    """语音活动控制器，用于检测语音活动并优化音频处理流程"""
-    
-    def __init__(self):
-        """初始化VAC处理器"""
-        # 初始化VAC
-        model, _ = torch.hub.load(
-            repo_or_dir='snakers4/silero-vad',
-            model='silero_vad'
-        )
-        self.vac = FixedVADIterator(model)
-        
-        # 初始化状态和缓冲区
-        self.status = None  # 'voice' 或 'nonvoice'
-        self.audio_buffer = np.array([], dtype=np.float32)
-        self.is_currently_final = False
-        self.buffer_offset = 0
-        self.current_buffer_size = 0
-        self.is_first = True
-        self.voice_start_time = None  # 记录语音开始的时间
-        self.voice_end_time = None    # 记录语音结束的时间
-        
-    def reset(self):
-        """重置VAC状态"""
-        self.vac.reset_states()
-        self.status = None
-        self.audio_buffer = np.array([], dtype=np.float32)
-        self.is_currently_final = False
-        self.buffer_offset = 0
-        self.current_buffer_size = 0
-        self.is_first = True
-        self.voice_start_time = None
-        self.voice_end_time = None
-    
-    def process_audio(self, audio):
-        """处理音频数据，使用VAC检测语音活动
-        
-        Args:
-            audio: numpy数组，音频数据
-            
-        Returns:
-            dict: 包含VAC处理结果的字典，可能包含'start'或'end'键
-            None: 如果没有检测到语音事件
-        """
-        vac_result = self.vac(audio)
-        logger.info(f"----------->>>>>>>The vac result is {vac_result}")
-        return vac_result
-    
-    def receive_audio_chunk(self, raw_bytes):
-        """接收并处理音频数据
-        
-        Args:
-            raw_bytes: 二进制音频数据
-            
-        Returns:
-            numpy数组: 处理后的音频数据
-            None: 如果数据不足或无效
-        """
-        # 将二进制数据转换为音频
-        out = []
-        minlimit = min_chunk * SAMPLING_RATE
-        
-        if not raw_bytes:
-            return None
-            
-        try:
-            sf = soundfile.SoundFile(io.BytesIO(raw_bytes), channels=1, endian="LITTLE", 
-                                    samplerate=SAMPLING_RATE, subtype="PCM_16", format="RAW")
-            audio, _ = librosa.load(sf, sr=SAMPLING_RATE, dtype=np.float32)
-            out.append(audio)
-        except Exception as e:
-            logger.error(f"音频数据转换失败: {e}")
-            return None
-        
-        if not out:
-            return None
-            
-        conc = np.concatenate(out)
-        
-        # 使用VAC处理音频
-        res = self.process_audio(conc)
-        self.audio_buffer = np.append(self.audio_buffer, conc)
-        self.current_buffer_size += len(conc)
-        
-        # 处理VAC检测结果
-        if res is not None:
-            if 'start' in res and 'end' not in res:
-                # 检测到语音开始
-                self.status = 'voice'
-                # 记录语音开始时间
-                self.voice_start_time = time.time()
-                logger.debug(f"VAC: 检测到语音开始，时间: {self.voice_start_time}")
-                frame = res['start'] - self.buffer_offset
-                if frame > 0:
-                    # 从检测到语音的位置开始处理
-                    audio_data = self.audio_buffer[frame:]
-                    if len(audio_data) < minlimit and self.is_first:
-                        return None
-                    self.is_first = False
-                    return audio_data
-            elif 'end' in res and 'start' not in res:
-                # 检测到语音结束
-                self.status = 'nonvoice'
-                # 记录语音结束时间
-                self.voice_end_time = time.time()
-                logger.debug(f"VAC: 检测到语音结束，时间: {self.voice_end_time}")
-                frame = res['end'] - self.buffer_offset
-                if frame > 0:
-                    # 处理到语音结束的位置
-                    audio_data = self.audio_buffer[:frame]
-                    self.is_currently_final = True
-                    self.clear_buffer()
-                    return audio_data
-            else:
-                # 检测到完整的语音段
-                self.status = 'nonvoice'
-                # 记录语音开始和结束时间
-                self.voice_start_time = time.time() - (res["end"] - res["start"]) / SAMPLING_RATE
-                self.voice_end_time = time.time()
-                logger.debug(f"VAC: 检测到完整语音段，开始时间: {self.voice_start_time}, 结束时间: {self.voice_end_time}")
-                beg = res["start"] - self.buffer_offset
-                end = res["end"] - self.buffer_offset
-                if beg >= 0 and end > beg:
-                    audio_data = self.audio_buffer[beg:end]
-                    self.is_currently_final = True
-                    self.clear_buffer()
-                    return audio_data
-        else:
-            # 没有检测到语音事件
-            if self.status == 'voice':
-                # 如果当前是语音状态，继续处理
-                if len(self.audio_buffer) >= minlimit or not self.is_first:
-                    self.is_first = False
-                    audio_data = self.audio_buffer.copy()
-                    self.clear_buffer()
-                    return audio_data
-            
-        # 如果缓冲区过大，进行裁剪以防止内存溢出
-        if len(self.audio_buffer) > SAMPLING_RATE * 10:  # 保留最多10秒
-            self.buffer_offset += max(0, len(self.audio_buffer) - SAMPLING_RATE * 10)
-            self.audio_buffer = self.audio_buffer[-SAMPLING_RATE * 10:]
-            
-        # 如果数据不足且是第一次处理，返回None
-        if len(conc) < minlimit and self.is_first:
-            return None
-            
-        self.is_first = False
-        return conc
-    
-    def clear_buffer(self):
-        """清除音频缓冲区"""
-        self.buffer_offset += len(self.audio_buffer)
-        self.audio_buffer = np.array([], dtype=np.float32)
-        self.current_buffer_size = 0
-
-# 全局VAC处理器实例
+# 全局实例
+audio_processor = AudioProcessor()
 vac_processor = None
-
-def receive_audio_chunk(raw_bytes):
-    """接收并处理音频数据块
-    
-    Args:
-        raw_bytes: 二进制音频数据
-        
-    Returns:
-        numpy数组: 处理后的音频数据
-        None: 如果数据不足或无效
-    """
-    global vac_processor
-    
-    # 如果VAC处理器未初始化，则初始化
-    if vac_processor is None:
-        vac_processor = VACProcessor()
-        
-    # 使用VAC处理器处理音频
-    return vac_processor.receive_audio_chunk(raw_bytes)
+subtitle_processor = None
+message_handler = None
+sagemaker_whisper_model = None
+correction_service = None
 
 @app.on_event("startup")
 async def startup_event():
-    """应用启动时初始化模型"""
-    global sagemaker_whisper_model, correction_service, vac_processor
+    """应用启动时初始化模型和处理器"""
+    global sagemaker_whisper_model, correction_service, vac_processor, subtitle_processor, message_handler
     
     # 初始化VAC处理器
     try:
@@ -319,6 +116,18 @@ async def startup_event():
         logger.info("Bedrock翻译服务已初始化")
     else:
         logger.warning("Bedrock翻译服务不可用，将使用备用翻译服务")
+    
+    # 初始化字幕处理器
+    subtitle_processor = SubtitleProcessor(correction_service=correction_service)
+    logger.info("字幕处理器已初始化")
+    
+    # 初始化消息处理器
+    message_handler = MessageHandler(
+        subtitle_processor=subtitle_processor,
+        vac_processor=vac_processor,
+        whisper_model=sagemaker_whisper_model
+    )
+    logger.info("消息处理器已初始化")
 
 
 @app.websocket("/ws/whisper")
@@ -331,19 +140,17 @@ async def websocket_whisper_endpoint(
     filename: str = Query(None)
 ):
     """Whisper模型WebSocket端点"""
+    global message_handler, vac_processor
+    
     client_id = str(uuid.uuid4())
     
     await websocket.accept()
-    active_connections[client_id] = websocket
     
-    # 初始化字幕列表
-    client_subtitles[client_id] = []
+    # 注册连接
+    message_handler.register_connection(client_id, websocket)
     
     # 重置VAC处理器状态
-    global vac_processor
-    if vac_processor is None:
-        vac_processor = VACProcessor()
-    else:
+    if vac_processor:
         vac_processor.reset()
     logger.info("VAC处理器已重置")
     
@@ -372,12 +179,11 @@ async def websocket_whisper_endpoint(
             "target_language": target_language
         })
         
-        # 创建临时文件存储音频块
-        audio_chunks: List[np.ndarray] = []
+        # 初始化处理状态
         current_chunk_index = 0
         pending_timestamp = None
         
-        # 处理接收到的消息（可能是时间戳信息或音频数据）
+        # 处理接收到的消息
         while True:
             try:
                 # 接收消息（可能是文本或二进制）
@@ -390,98 +196,50 @@ async def websocket_whisper_endpoint(
                     if "text" in message:
                         # 处理文本消息（时间戳信息）
                         logger.info(f"收到文本消息，长度: {len(message['text'])}")
-                        try:
-                            message_data = json.loads(message["text"])
-                            logger.info(f"解析JSON成功，消息类型: {message_data.get('type')}")
-                            
-                            if message_data.get('type') == 'audio_with_timestamp':
-                                # 处理时间戳信息
-                                await process_timestamp_message(client_id, message_data)
-                                pending_timestamp = message_data.get('timestamp')
-                                logger.info(f"接收到时间戳信息，chunk_index: {pending_timestamp.get('chunk_index', 'unknown')}")
-                                continue
-                            else:
-                                logger.warning(f"未知的文本消息类型: {message_data.get('type')}")
-                                continue
-                                
-                        except json.JSONDecodeError as e:
-                            logger.error(f"JSON解析失败: {e}, 消息内容: {message['text'][:100]}...")
-                            continue
+                        result = await message_handler.handle_text_message(client_id, message['text'])
+                        
+                        # 如果是时间戳消息，更新待处理时间戳
+                        if result and result.get('type') == 'timestamp_received':
+                            timestamp_data = json.loads(message['text']).get('timestamp', {})
+                            pending_timestamp = timestamp_data
+                            logger.info(f"更新待处理时间戳: chunk_index={pending_timestamp.get('chunk_index', 'unknown')}")
+                        
+                        # 如果需要响应，发送响应
+                        if result:
+                            await websocket.send_json(result)
                             
                     elif "bytes" in message:
                         # 处理二进制消息（音频数据）
                         data = message["bytes"]
                         logger.info(f"接收到音频数据，大小: {len(data)} bytes, 数据类型: {type(data)}")
-                        audio_data = receive_audio_chunk(data)
-                        if audio_data is not None:
-                            # 添加到音频块列表
-                            audio_chunks.append(audio_data)
-                            logger.info(f"音频数据添加到chunks，当前chunks数量: {len(audio_chunks)}")
-                            
-                            # 检查VAC状态
-                            if vac_processor.status == 'voice':
-                                logger.info("VAC状态为'voice'，处理音频数据")
+                        
+                        # 处理音频数据
+                        result = await message_handler.handle_binary_message(
+                            client_id=client_id,
+                            binary_data=data,
+                            language=language,
+                            enable_correction=correction,
+                            enable_translation=translation,
+                            target_language=target_language,
+                            pending_timestamp=pending_timestamp,
+                            current_chunk_index=current_chunk_index
+                        )
+                        
+                        # 处理结果
+                        if result:
+                            if result.get('type') == 'audio_processed':
+                                # 音频处理成功，发送字幕结果
+                                for subtitle_result in result.get('results', []):
+                                    await websocket.send_json(subtitle_result)
                                 
-                                # 记录当前时间戳信息
-                                current_timestamp = {
-                                    'chunk_index': current_chunk_index,
-                                    'start_time': time.time() - vac_processor.voice_start_time if hasattr(vac_processor, 'voice_start_time') else time.time(),
-                                    'end_time': time.time(),
-                                    'duration': len(audio_data) / SAMPLING_RATE,
-                                    'total_samples_processed': vac_processor.buffer_offset + len(audio_data),
-                                    'audio_start_time': time.time() - len(audio_data) / SAMPLING_RATE,
-                                    'processing_start_time': time.time(),
-                                    'current_time': time.time()
-                                }
-                                
-                                # 如果没有待处理的时间戳，使用当前生成的时间戳
-                                if not pending_timestamp:
-                                    pending_timestamp = current_timestamp
-                                    logger.info(f"生成新的时间戳信息: chunk_index={current_timestamp.get('chunk_index')}")
-                                
-                                # 创建异步生成器
-                                async def audio_generator():
-                                    yield audio_data
-                                
-                                # 使用SageMaker Whisper模型处理音频
-                                if sagemaker_whisper_model and sagemaker_whisper_model.is_available():
-                                    logger.info("开始使用SageMaker Whisper处理音频...")
-                                    # 为当前语言更新模型配置
-                                    await update_whisper_model_language(language)
-                                    
-                                    async for subtitle in sagemaker_whisper_model.transcribe_stream(
-                                        audio_generator(), language=language
-                                    ):
-                                        # 应用时间戳到字幕
-                                        if pending_timestamp:
-                                            subtitle = await apply_timestamp_to_subtitle(subtitle, pending_timestamp)
-                                            logger.info(f"应用时间戳到字幕: chunk_index={pending_timestamp.get('chunk_index')}, start={subtitle.start:.2f}s, end={subtitle.end:.2f}s")
-                                            
-                                            # 存储时间戳信息
-                                            if client_id not in client_timestamps:
-                                                client_timestamps[client_id] = {}
-                                            client_timestamps[client_id][current_chunk_index] = pending_timestamp
-                                            
-                                            pending_timestamp = None  # 清除已使用的时间戳
-                                        
-                                        # 发送字幕回客户端（传递处理参数）
-                                        logging.info(f"Received subtitle: {subtitle}")
-                                        await send_subtitle(
-                                            websocket, subtitle, client_id, 
-                                            language=language,
-                                            enable_correction=correction,
-                                            enable_translation=translation,
-                                            target_language=target_language
-                                        )
-                                else:
-                                    logger.warning("SageMaker Whisper模型不可用")
-                            else:
-                                logger.info(f"VAC状态为'{vac_processor.status}'，跳过音频处理")
-                                
-                            # 无论VAC状态如何，都增加chunk索引
-                            current_chunk_index += 1
-                        else:
-                            logger.warning("音频数据处理失败，跳过此chunk")
+                                # 清除已使用的时间戳
+                                pending_timestamp = None
+                            elif result.get('type') == 'error':
+                                # 处理错误
+                                await websocket.send_json(result)
+                        
+                        # 无论处理结果如何，都增加chunk索引
+                        current_chunk_index += 1
                     else:
                         logger.warning(f"未知的消息格式，消息键: {list(message.keys())}")
                         
@@ -508,32 +266,20 @@ async def websocket_whisper_endpoint(
                 except Exception as send_error:
                     logger.error(f"发送错误消息失败: {send_error}")
                 break
-            
-            except Exception as e:
-                logger.error(f"处理音频数据失败: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"处理音频数据失败: {str(e)}"
-                })
     
     except WebSocketDisconnect:
         logger.info(f"客户端 {client_id} 断开连接")
         # 保存字幕文件
-        if client_id in client_subtitles and client_subtitles[client_id]:
-            try:
-                save_subtitles(client_subtitles[client_id], filename, language)
-                logger.info(f"已保存字幕文件: {filename}")
-            except Exception as e:
-                logger.error(f"保存字幕文件失败: {e}")
+        try:
+            subtitle_processor.save_subtitles(client_id, filename, language)
+            logger.info(f"已保存字幕文件: {filename}")
+        except Exception as e:
+            logger.error(f"保存字幕文件失败: {e}")
     except Exception as e:
         logger.error(f"WebSocket错误: {e}")
     finally:
         # 清理连接
-        if client_id in active_connections:
-            del active_connections[client_id]
-        # 清理字幕数据
-        if client_id in client_subtitles:
-            del client_subtitles[client_id]
+        message_handler.unregister_connection(client_id)
 
 
 @app.websocket("/ws/transcribe")
@@ -545,444 +291,34 @@ async def websocket_transcribe_endpoint(
     target_language: str = Query("en"),
     filename: str = Query(None)
 ):
-    """Amazon Transcribe模型WebSocket端点"""
+    """Amazon Transcribe模型WebSocket端点 - 当前不支持"""
     client_id = str(uuid.uuid4())
     
     await websocket.accept()
-    active_connections[client_id] = websocket
-    
-    # 初始化字幕列表
-    client_subtitles[client_id] = []
-    
-    # 重置VAC处理器状态
-    global vac_processor
-    if vac_processor is None:
-        vac_processor = VACProcessor()
-    else:
-        vac_processor.reset()
-    logger.info("VAC处理器已重置")
-    
-    # 如果没有提供文件名，使用时间戳
-    if not filename:
-        filename = f"subtitle_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    logger.info(f"客户端 {client_id} 已连接到Transcribe端点")
-    logger.info(f"参数 - 语言: {language}, 纠错: {correction}, 翻译: {translation}, 目标语言: {target_language}, 文件名: {filename}")
+    logger.info(f"客户端 {client_id} 已连接到Transcribe端点，但该功能当前不支持")
     
     try:
-        # 发送连接确认
+        # 发送不支持的功能消息
         await websocket.send_json({
-            "type": "connection",
-            "status": "connected",
-            "client_id": client_id,
-            "model": "transcribe",
-            "language": language,
-            "correction_enabled": correction,
-            "translation_enabled": translation,
-            "target_language": target_language
+            "type": "error",
+            "status": "unsupported",
+            "message": "Amazon Transcribe功能当前不支持，请使用Whisper端点",
+            "client_id": client_id
         })
         
-        # 创建Transcribe模型实例
-        transcribe_model = TranscribeModel(
-            backend="transcribe",
-            region_name=AWS_REGION
-        )
-        
-        # 创建临时文件存储音频块
-        audio_chunks: List[np.ndarray] = []
-        
-        # 处理接收到的音频数据
-        async for data in websocket.iter_bytes():
+        # 等待客户端断开连接
+        while True:
             try:
-                # 使用VAC处理音频数据
-                audio_data = receive_audio_chunk(data)
-                
-                if audio_data is not None:
-                    # 添加到音频块列表
-                    audio_chunks.append(audio_data)
-                    
-                    # 创建异步生成器
-                    async def audio_generator():
-                        yield audio_data
-                    
-                    # 使用Amazon Transcribe模型处理音频
-                    if transcribe_model and transcribe_model.is_available():
-                        async for subtitle in transcribe_model.transcribe_stream(
-                            audio_generator(), language=language
-                        ):
-                            # 发送字幕回客户端（传递处理参数）
-                            logging.info(f"Received subtitle: {subtitle}")
-                            await send_subtitle(
-                                websocket, subtitle, client_id, 
-                                language=language,
-                                enable_correction=correction,
-                                enable_translation=translation,
-                                target_language=target_language
-                            )
-            
-            except Exception as e:
-                logger.error(f"处理音频数据失败: {e}")
-                await websocket.send_json({
-                    "type": "error",
-                    "message": f"处理音频数据失败: {str(e)}"
-                })
+                message = await websocket.receive()
+                if message["type"] == "websocket.disconnect":
+                    break
+            except WebSocketDisconnect:
+                break
     
-    except WebSocketDisconnect:
-        logger.info(f"客户端 {client_id} 断开连接")
-        # 保存字幕文件
-        if client_id in client_subtitles and client_subtitles[client_id]:
-            try:
-                save_subtitles(client_subtitles[client_id], filename, language)
-                logger.info(f"已保存字幕文件: {filename}")
-            except Exception as e:
-                logger.error(f"保存字幕文件失败: {e}")
     except Exception as e:
         logger.error(f"WebSocket错误: {e}")
     finally:
-        # 清理连接
-        if client_id in active_connections:
-            del active_connections[client_id]
-        # 清理字幕数据
-        if client_id in client_subtitles:
-            del client_subtitles[client_id]
-
-
-async def process_timestamp_message(client_id: str, message_data: dict):
-    """处理时间戳消息"""
-    try:
-        timestamp_info = message_data.get('timestamp', {})
-        
-        # 存储时间戳信息
-        if client_id not in client_timestamps:
-            client_timestamps[client_id] = {}
-        
-        chunk_index = timestamp_info.get('chunk_index', 0)
-        client_timestamps[client_id][chunk_index] = {
-            'start_time': timestamp_info.get('start_time', 0.0),
-            'end_time': timestamp_info.get('end_time', 0.0),
-            'duration': timestamp_info.get('duration', 0.0),
-            'chunk_index': chunk_index,
-            'total_samples_processed': timestamp_info.get('total_samples_processed', 0),
-            'audio_start_time': timestamp_info.get('audio_start_time', 0.0),
-            'processing_start_time': timestamp_info.get('processing_start_time', 0.0),
-            'current_time': timestamp_info.get('current_time', 0.0),
-            'received_at': datetime.datetime.now().isoformat()
-        }
-        
-        logger.info(f"客户端 {client_id} 时间戳信息已存储:")
-        logger.info(f"  - Chunk {chunk_index}: {timestamp_info.get('start_time', 0.0):.2f}s - {timestamp_info.get('end_time', 0.0):.2f}s")
-        
-        return True
-    except Exception as e:
-        logger.error(f"处理时间戳消息失败: {e}")
-        return False
-
-
-async def get_chunk_timestamp(client_id: str, chunk_index: int) -> Optional[Dict]:
-    """获取指定chunk的时间戳信息"""
-    if client_id in client_timestamps and chunk_index in client_timestamps[client_id]:
-        return client_timestamps[client_id][chunk_index]
-    return None
-
-
-async def apply_timestamp_to_subtitle(subtitle: Subtitle, timestamp_info: Dict) -> Subtitle:
-    """将时间戳信息应用到字幕对象"""
-    if timestamp_info:
-        # 使用VAC检测到的语音片段时间戳
-        subtitle.start = timestamp_info['start_time']
-        subtitle.end = timestamp_info['end_time']
-        
-        # 确保结束时间大于开始时间
-        if subtitle.end <= subtitle.start:
-            subtitle.end = subtitle.start + timestamp_info['duration']
-        
-        # 记录详细的时间戳信息到日志
-        logger.info(f"应用时间戳到字幕: {subtitle.start:.2f}s - {subtitle.end:.2f}s")
-        logger.info(f"时间戳详情: chunk_index={timestamp_info.get('chunk_index')}, "
-                   f"duration={timestamp_info.get('duration'):.2f}s, "
-                   f"total_samples={timestamp_info.get('total_samples_processed')}")
-    
-    return subtitle
-
-
-async def update_whisper_model_language(language: str):
-    """动态更新Whisper模型的语言配置"""
-    global sagemaker_whisper_model
-    
-    try:
-        if sagemaker_whisper_model and hasattr(sagemaker_whisper_model, 'set_language'):
-            # 如果模型支持动态语言设置
-            await sagemaker_whisper_model.set_language(language)
-            logger.info(f"Whisper模型语言已更新为: {language}")
-        else:
-            # 使用语言特定配置
-            logger.info(f"为语言 {language} 重新配置Whisper模型")
-            
-            # 获取语言特定配置
-            config = create_whisper_config(language)
-            sagemaker_params = get_sagemaker_whisper_params(language)
-            
-            logger.info(f"语言 {language} 的Whisper配置: {config}")
-            logger.info(f"语言 {language} 的SageMaker参数: {sagemaker_params}")
-            
-            # 更新模型配置
-            if hasattr(sagemaker_whisper_model, 'whisper_config'):
-                sagemaker_whisper_model.whisper_config = config
-                logger.info(f"Whisper配置已更新")
-            
-            # 如果模型支持设置SageMaker参数
-            if hasattr(sagemaker_whisper_model, 'set_sagemaker_params'):
-                sagemaker_whisper_model.set_sagemaker_params(sagemaker_params)
-                logger.info(f"SageMaker参数已更新")
-            
-    except Exception as e:
-        logger.error(f"更新Whisper模型语言配置失败: {e}")
-
-
-async def process_wav_data(data: bytes) -> Optional[np.ndarray]:
-    """处理WAV数据"""
-    try:
-        # 保存为临时文件
-        temp_file = temp_dir / f"temp_{uuid.uuid4()}.wav"
-        with open(temp_file, "wb") as f:
-            f.write(data)
-        
-        # 使用音频处理器加载文件
-        audio_data = await audio_processor.process_file(temp_file)
-        
-        # 删除临时文件
-        try:
-            os.remove(temp_file)
-        except:
-            pass
-        
-        return audio_data
-    
-    except Exception as e:
-        logger.error(f"处理WAV数据失败: {e}")
-        return None
-
-
-def save_subtitles(subtitles: List[Subtitle], filename: str, language: str):
-    """保存字幕到文件"""
-    if not subtitles:
-        logger.warning("没有字幕可保存")
-        return
-    
-    # 确保文件名不包含非法字符
-    filename = "".join(c for c in filename if c.isalnum() or c in "._- ")
-    
-    # 保存SRT格式
-    srt_path = subtitle_dir / f"{filename}_{language}.srt"
-    with open(srt_path, "w", encoding="utf-8") as f:
-        for i, subtitle in enumerate(subtitles, 1):
-            f.write(f"{i}\n")
-            f.write(f"{subtitle.format_time(subtitle.start, 'srt')} --> {subtitle.format_time(subtitle.end, 'srt')}\n")
-            f.write(f"{subtitle.text}\n")
-            if subtitle.translated_text:
-                f.write(f"{subtitle.translated_text}\n")
-            f.write("\n")
-    
-    # 保存VTT格式
-    vtt_path = subtitle_dir / f"{filename}_{language}.vtt"
-    with open(vtt_path, "w", encoding="utf-8") as f:
-        f.write("WEBVTT\n\n")
-        for subtitle in subtitles:
-            f.write(f"{subtitle.format_time(subtitle.start, 'vtt')} --> {subtitle.format_time(subtitle.end, 'vtt')}\n")
-            f.write(f"{subtitle.text}\n")
-            if subtitle.translated_text:
-                f.write(f"{subtitle.translated_text}\n")
-            f.write("\n")
-    
-    # 保存JSON格式（包含更多元数据）
-    json_path = subtitle_dir / f"{filename}_{language}.json"
-    with open(json_path, "w", encoding="utf-8") as f:
-        json.dump(
-            {
-                "language": language,
-                "subtitles": [subtitle.to_dict() for subtitle in subtitles]
-            },
-            f,
-            ensure_ascii=False,
-            indent=2
-        )
-    
-    logger.info(f"字幕已保存为SRT格式: {srt_path}")
-    logger.info(f"字幕已保存为VTT格式: {vtt_path}")
-    logger.info(f"字幕已保存为JSON格式: {json_path}")
-
-
-async def send_subtitle(
-    websocket: WebSocket, 
-    subtitle: Subtitle, 
-    client_id: str, 
-    language: str = "ar",
-    enable_correction: bool = True,
-    enable_translation: bool = True,
-    target_language: str = "en"
-):
-    """发送字幕到客户端"""
-    try:
-        # 创建唯一ID
-        subtitle_id = f"{client_id}_{uuid.uuid4()}"
-        logger.info(f"处理字幕 - 原文: {subtitle.text}")
-        logger.info(f"处理参数 - 纠错: {enable_correction}, 翻译: {enable_translation}, 目标语言: {target_language}")
-        
-        # 将字幕添加到客户端的字幕列表中
-        if client_id in client_subtitles:
-            client_subtitles[client_id].append(subtitle)
-        
-        # 步骤1: 字幕纠错 (如果启用)
-        corrected_text = subtitle.text
-        correction_applied = False
-        split_subtitles = []
-        has_split = False
-        
-        if enable_correction and subtitle.text.strip() and correction_service:
-            try:
-                # 获取历史字幕作为上下文
-                history_subtitles = []
-                if client_id in client_subtitles and len(client_subtitles[client_id]) > 1:
-                    # 获取最近的3条历史字幕
-                    recent_subtitles = client_subtitles[client_id][-4:-1]  # 排除当前字幕
-                    history_subtitles = [s.text for s in recent_subtitles if s.text.strip()]
-                
-                # 构建纠错输入
-                correction_input = CorrectionInput(
-                    current_subtitle=subtitle.text,
-                    history_subtitles=history_subtitles,
-                    scene_description=get_correction_scene_description(language),
-                    language=language
-                )
-                
-                # 执行纠错
-                correction_result = await correction_service.correct(correction_input)
-                
-                if correction_result.has_correction:
-                    corrected_text = correction_result.corrected_subtitle
-                    correction_applied = True
-                    logger.info(f"字幕已纠错: '{subtitle.text}' -> '{corrected_text}' (置信度: {correction_result.confidence})")
-                    
-                    # 更新subtitle对象中的文本
-                    subtitle.text = corrected_text
-                else:
-                    logger.info(f"字幕无需纠错: '{subtitle.text}'")
-                
-                # 处理长句拆分结果
-                if correction_result.has_split and correction_result.split_subtitles:
-                    has_split = True
-                    split_subtitles = correction_result.split_subtitles
-                    logger.info(f"字幕已拆分为 {len(split_subtitles)} 个子句: {split_subtitles}")
-                    
-            except Exception as e:
-                logger.error(f"字幕纠错失败: {e}")
-                # 纠错失败时使用原始文本
-                corrected_text = subtitle.text
-        else:
-            logger.info(f"跳过纠错 - 启用状态: {enable_correction}")
-        
-        # 如果没有拆分，按原流程处理单个字幕
-        if not has_split:
-            # 步骤2: 翻译字幕文本 (如果启用，使用纠错后的文本)
-            if enable_translation and corrected_text.strip():
-                try:
-                    # 使用翻译服务翻译文本
-                    translation_result = await translation_manager.translate(
-                        text=corrected_text,
-                        target_lang=target_language,
-                        service="bedrock"  # 优先使用Bedrock翻译服务
-                    )
-                    
-                    # 设置翻译结果
-                    subtitle.translated_text = translation_result.translated_text
-                    logger.info(f"字幕已翻译: {corrected_text} -> {subtitle.translated_text}")
-                except Exception as e:
-                    logger.error(f"翻译失败: {e}")
-                    subtitle.translated_text = f"[翻译失败] {corrected_text}"
-            else:
-                logger.info(f"跳过翻译 - 启用状态: {enable_translation}")
-                subtitle.translated_text = None
-            
-            # 发送单个字幕
-            await websocket.send_json({
-                "type": "subtitle",
-                "subtitle": {
-                    "id": subtitle_id,
-                    "start": subtitle.start,
-                    "end": subtitle.end,
-                    "text": subtitle.text,  # 纠错后的文本
-                    "original_text": subtitle.text if not correction_applied else None,  # 原始文本(如果有纠错)
-                    "translated_text": subtitle.translated_text,
-                    "correction_applied": correction_applied,
-                    "translation_applied": enable_translation and subtitle.translated_text is not None,
-                    "target_language": target_language if enable_translation else None
-                }
-            })
-        else:
-            # 处理拆分后的多个字幕
-            # 计算每个子句的时间分配
-            total_duration = subtitle.duration
-            sub_duration = total_duration / len(split_subtitles)
-            
-            # 为每个拆分的字幕创建新的Subtitle对象并发送
-            for i, split_text in enumerate(split_subtitles):
-                # 计算子句的时间范围
-                sub_start = subtitle.start + i * sub_duration
-                sub_end = sub_start + sub_duration
-                
-                # 创建新的Subtitle对象
-                sub_subtitle = Subtitle(
-                    start=sub_start,
-                    end=sub_end,
-                    text=split_text
-                )
-                
-                # 添加到客户端的字幕列表
-                if client_id in client_subtitles:
-                    client_subtitles[client_id].append(sub_subtitle)
-                
-                # 翻译子句
-                if enable_translation and split_text.strip():
-                    try:
-                        # 使用翻译服务翻译文本
-                        translation_result = await translation_manager.translate(
-                            text=split_text,
-                            target_lang=target_language,
-                            service="bedrock"
-                        )
-                        
-                        # 设置翻译结果
-                        sub_subtitle.translated_text = translation_result.translated_text
-                        logger.info(f"拆分字幕已翻译: {split_text} -> {sub_subtitle.translated_text}")
-                    except Exception as e:
-                        logger.error(f"拆分字幕翻译失败: {e}")
-                        sub_subtitle.translated_text = f"[翻译失败] {split_text}"
-                
-                # 发送拆分后的字幕
-                sub_id = f"{client_id}_{uuid.uuid4()}"
-                await websocket.send_json({
-                    "type": "subtitle",
-                    "subtitle": {
-                        "id": sub_id,
-                        "start": sub_subtitle.start,
-                        "end": sub_subtitle.end,
-                        "text": sub_subtitle.text,
-                        "original_text": None,  # 已经是纠错后的文本
-                        "translated_text": sub_subtitle.translated_text,
-                        "correction_applied": True,  # 拆分的字幕都是经过纠错的
-                        "translation_applied": enable_translation and sub_subtitle.translated_text is not None,
-                        "target_language": target_language if enable_translation else None,
-                        "is_split": True,  # 标记为拆分字幕
-                        "split_index": i,  # 拆分序号
-                        "split_total": len(split_subtitles),  # 拆分总数
-                        "original_subtitle_id": subtitle_id  # 原始字幕ID
-                    }
-                })
-                
-                # 短暂延迟，确保字幕按顺序发送
-                await asyncio.sleep(0.05)
-    except Exception as e:
-        logger.error(f"发送字幕失败: {e}")
+        logger.info(f"客户端 {client_id} 断开连接")
 
 
 @app.websocket("/ws/save_subtitles")
@@ -992,51 +328,20 @@ async def websocket_save_subtitles_endpoint(
     filename: str = Query(None)
 ):
     """保存字幕WebSocket端点"""
+    global subtitle_processor
+    
     await websocket.accept()
     
     try:
-        # 检查客户端ID是否存在
-        if client_id not in client_subtitles:
-            await websocket.send_json({
-                "type": "error",
-                "message": "客户端ID不存在或已过期"
-            })
-            return
-        
         # 如果没有提供文件名，使用时间戳
         if not filename:
             filename = f"subtitle_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
         
-        # 获取字幕列表
-        subtitles = client_subtitles[client_id]
-        
-        if not subtitles:
-            await websocket.send_json({
-                "type": "error",
-                "message": "没有可用的字幕"
-            })
-            return
-        
         # 保存字幕
-        try:
-            save_subtitles(subtitles, filename, "auto")
-            
-            # 发送成功消息
-            await websocket.send_json({
-                "type": "success",
-                "message": "字幕已保存",
-                "files": [
-                    f"{filename}_auto.srt",
-                    f"{filename}_auto.vtt",
-                    f"{filename}_auto.json"
-                ]
-            })
-        except Exception as e:
-            logger.error(f"保存字幕失败: {e}")
-            await websocket.send_json({
-                "type": "error",
-                "message": f"保存字幕失败: {str(e)}"
-            })
+        result = await message_handler.handle_save_subtitles(client_id, filename, "auto")
+        
+        # 发送结果
+        await websocket.send_json(result)
     
     except WebSocketDisconnect:
         logger.info("保存字幕连接已断开")
