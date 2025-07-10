@@ -39,6 +39,7 @@ class VACProcessor:
         sample_rate: int = 16000,
         processing_chunk_size: int = 512,
         no_audio_input_threshold: float = 5,
+        buffer_duration: float = 60.0,  # 缓冲区保留的音频时长(秒)
         on_speech_segment: Optional[Callable[[Dict[str, Any]], None]] = None
     ):
         """
@@ -51,6 +52,7 @@ class VACProcessor:
             sample_rate: 音频采样率
             processing_chunk_size: 处理块大小，必须是512的整数倍
             no_audio_input_threshold: 无音频输入阈值(秒)
+            buffer_duration: 音频缓冲区保留的时长(秒)
             on_speech_segment: 语音段检测完成时的回调函数
         """
         self.threshold = threshold
@@ -59,6 +61,7 @@ class VACProcessor:
         self.sample_rate = sample_rate
         self.processing_chunk_size = processing_chunk_size
         self.no_audio_input_threshold = no_audio_input_threshold
+        self.buffer_duration = buffer_duration
         self.on_speech_segment = on_speech_segment
         
         # 验证处理块大小
@@ -73,7 +76,10 @@ class VACProcessor:
         self._vad_iterator = None
         
         # 音频缓存和状态跟踪
-        self._audio_buffer = deque()  # 存储音频数据
+        # 计算缓冲区最大长度 (基于时间和采样率)
+        max_buffer_samples = int(self.buffer_duration * self.sample_rate)
+        max_buffer_chunks = max_buffer_samples // self.processing_chunk_size + 10  # 额外空间防止边界问题
+        self._audio_buffer = deque(maxlen=max_buffer_chunks)  # 存储音频数据，限制最大长度
         self._current_start_time = None  # 当前语音段的开始时间
         self._current_start_sample = None  # 当前语音段的开始样本位置
         
@@ -84,6 +90,7 @@ class VACProcessor:
         logger.info(f"  sample_rate: {self.sample_rate}")
         logger.info(f"  processing_chunk_size: {self.processing_chunk_size}")
         logger.info(f"  no_audio_input_threshold: {self.no_audio_input_threshold}")
+        logger.info(f"  buffer_duration: {self.buffer_duration}秒 (约 {max_buffer_samples} 个样本)")
     
     def _load_model(self):
         """加载Silero VAD模型"""
@@ -119,7 +126,7 @@ class VACProcessor:
     def process_streaming_audio(
         self, 
         audio_stream: Iterator[np.ndarray],
-        end_stream_flag: True,
+        end_stream_flag: bool = True,
         return_segments: bool = True
     ) -> List[Dict[str, Any]]:
         """
@@ -127,6 +134,7 @@ class VACProcessor:
         
         Args:
             audio_stream: 音频流迭代器，每个元素是numpy数组
+            end_stream_flag: 是否在处理完所有数据后标记流结束
             return_segments: 是否返回语音段格式（包含start、end、duration）
             
         Returns:
@@ -156,6 +164,7 @@ class VACProcessor:
         logger.info(f"  min_silence_duration_ms={self.min_silence_duration_ms}")
         logger.info(f"  speech_pad_ms={self.speech_pad_ms}")
         logger.info(f"  no_audio_input_threshold={self.no_audio_input_threshold}秒")
+        logger.info(f"  buffer_duration={self.buffer_duration}秒")
         
         try:
             # 处理流式音频
@@ -165,6 +174,21 @@ class VACProcessor:
                 
                 # 将音频块添加到缓存
                 self._audio_buffer.append((audio_chunk.copy(), total_samples_processed))
+                
+                # 清理过旧的缓冲区数据，保持内存使用合理
+                current_time = total_samples_processed / self.sample_rate
+                buffer_start_time = current_time - self.buffer_duration
+                
+                # 只有当缓冲区接近满时才清理，避免频繁操作
+                if len(self._audio_buffer) > self._audio_buffer.maxlen * 0.8:
+                    # 计算要保留的最早样本位置
+                    earliest_sample_to_keep = int(buffer_start_time * self.sample_rate)
+                    
+                    # 移除过旧的数据
+                    while (self._audio_buffer and 
+                           self._audio_buffer[0][1] + len(self._audio_buffer[0][0]) < earliest_sample_to_keep):
+                        old_chunk = self._audio_buffer.popleft()
+                        logger.debug(f"移除过旧的音频块: {old_chunk[1]}-{old_chunk[1]+len(old_chunk[0])}")
                 
                 # 处理音频块
                 for i in range(0, len(audio_chunk), self.processing_chunk_size):
@@ -200,7 +224,7 @@ class VACProcessor:
                             end_sample = int(end_time * self.sample_rate)
                             
                             # 提取对应的音频数据
-                            audio_bytes = self._extract_audio_segment(
+                            audio_bytes, audio_metadata = self._extract_audio_segment(
                                 self._current_start_sample, 
                                 end_sample
                             )
@@ -211,10 +235,14 @@ class VACProcessor:
                                 'end': end_time,
                                 'duration': end_time - self._current_start_time,
                                 'audio_bytes': audio_bytes,
-                                'sample_rate': self.sample_rate
+                                'sample_rate': self.sample_rate,
+                                'audio_format': 'float32',
+                                'num_channels': 1,
+                                'audio_metadata': audio_metadata
                             }
                             
-                            logger.info(f"检测到语音结束: {end_time:.2f}s, 时长: {speech_segment['duration']:.2f}s")
+                            logger.info(f"检测到语音结束: {end_time:.2f}s, 时长: {speech_segment['duration']:.2f}s, " +
+                                       f"音频完整性: {audio_metadata['completeness']:.1f}%")
                             
                             # 🚀 发射事件 - 确保只触发一次
                             if self.on_speech_segment:
@@ -223,6 +251,8 @@ class VACProcessor:
                                     logger.debug(f"✅ 语音段事件已触发: {self._current_start_time:.2f}s-{end_time:.2f}s")
                                 except Exception as e:
                                     logger.error(f"事件回调执行失败: {e}")
+                                    import traceback
+                                    logger.error(traceback.format_exc())
                             
                             # 🔧 重要：立即重置状态，防止重复触发
                             self._current_start_time = None
@@ -234,20 +264,24 @@ class VACProcessor:
                 
                 # 检查是否超过无音频输入阈值
                 if time.time() - last_audio_time > self.no_audio_input_threshold:
+                    logger.warning(f"超过无音频输入阈值 ({self.no_audio_input_threshold}秒)，标记流结束")
                     stream_ended = True
                     break
             
             # 标记流已结束
-            if end_stream_flag is True:
+            if end_stream_flag:
+                logger.info("end_stream_flag为True，标记流结束")
                 stream_ended = True
             
         except Exception as e:
-            print(f"流处理中断: {e}")
+            logger.error(f"流处理中断: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             stream_ended = True
         
         # 🔧 修复：音频流结束时的处理
         if stream_ended:
-            print(f"音频流已结束，正在进行最终处理...")
+            logger.info(f"音频流已结束，正在进行最终处理...")
             
             # 如果VAD仍处于触发状态，强制结束当前语音段
             if vad.triggered and self._current_start_time is not None:
@@ -256,7 +290,7 @@ class VACProcessor:
                 end_sample = total_samples_processed
                 
                 # 提取音频数据
-                audio_bytes = self._extract_audio_segment(
+                audio_bytes, audio_metadata = self._extract_audio_segment(
                     self._current_start_sample, 
                     end_sample
                 )
@@ -267,18 +301,26 @@ class VACProcessor:
                     'end': end_time,
                     'duration': end_time - self._current_start_time,
                     'audio_bytes': audio_bytes,
-                    'sample_rate': self.sample_rate
+                    'sample_rate': self.sample_rate,
+                    'audio_format': 'float32',
+                    'num_channels': 1,
+                    'audio_metadata': audio_metadata,
+                    'is_final': True
                 }
                 
                 results.append({'end': end_time})
-                print(f"检测到未结束的语音段，强制结束于 {end_time:.2f}秒")
+                logger.info(f"检测到未结束的语音段，强制结束于 {end_time:.2f}秒, " +
+                           f"音频完整性: {audio_metadata['completeness']:.1f}%")
                 
                 # 🚀 发射最终事件
                 if self.on_speech_segment:
                     try:
                         self.on_speech_segment(speech_segment)
+                        logger.info(f"✅ 最终语音段事件已触发: {self._current_start_time:.2f}s-{end_time:.2f}s")
                     except Exception as e:
                         logger.error(f"最终事件回调执行失败: {e}")
+                        import traceback
+                        logger.error(traceback.format_exc())
             
             # 强制刷新VAD状态，确保所有缓冲的结果都被输出
             try:
@@ -286,10 +328,10 @@ class VACProcessor:
                 silent_chunk = np.zeros(self.processing_chunk_size, dtype=np.float32)
                 final_result = vad(silent_chunk, return_seconds=True)
                 if final_result:
-                    print(f"最终刷新结果: {final_result}")
+                    logger.info(f"最终刷新结果: {final_result}")
                     results.append(final_result)
             except Exception as e:
-                print(f"最终刷新时出错: {e}")
+                logger.error(f"最终刷新时出错: {e}")
         
         # 根据需要返回不同格式
         if return_segments:
@@ -299,19 +341,23 @@ class VACProcessor:
     
     def _extract_audio_segment(self, start_sample: int, end_sample: int) -> bytes:
         """
-        从音频缓存中提取指定范围的音频数据
+        从音频缓存中提取指定范围的音频数据，确保完整性
         
         Args:
             start_sample: 开始样本位置
             end_sample: 结束样本位置
-            
+                
         Returns:
             音频数据的字节表示
         """
         try:
             # 收集指定范围内的音频数据
             audio_segments = []
-            current_sample = 0
+            samples_found = 0
+            required_samples = end_sample - start_sample
+            
+            # 记录提取过程
+            logger.debug(f"提取音频段: {start_sample}-{end_sample}, 需要 {required_samples} 个样本")
             
             for audio_chunk, chunk_start_sample in self._audio_buffer:
                 chunk_end_sample = chunk_start_sample + len(audio_chunk)
@@ -325,19 +371,66 @@ class VACProcessor:
                     # 提取相关部分
                     segment = audio_chunk[relative_start:relative_end]
                     audio_segments.append(segment)
+                    samples_found += len(segment)
+                    
+                    logger.debug(f"从块 {chunk_start_sample}-{chunk_end_sample} 提取了 {len(segment)} 个样本")
             
             if audio_segments:
                 # 合并所有音频段
                 combined_audio = np.concatenate(audio_segments)
+                
+                # 检查是否获取了足够的样本
+                completeness = samples_found / required_samples * 100 if required_samples > 0 else 100
+                logger.info(f"音频段提取完成: 获取了 {samples_found}/{required_samples} 个样本 ({completeness:.1f}%)")
+                
+                # 如果样本不足，可以考虑填充或记录警告
+                if samples_found < required_samples:
+                    logger.warning(f"音频段不完整: 缺少 {required_samples - samples_found} 个样本")
+                    
+                    # 可选: 填充缺失的样本
+                    if samples_found < required_samples * 0.8:  # 如果缺失超过20%
+                        padding = np.zeros(required_samples - samples_found, dtype=np.float32)
+                        combined_audio = np.concatenate([combined_audio, padding])
+                        logger.info(f"已填充 {len(padding)} 个静音样本")
+                
                 # 转换为字节
-                return combined_audio.astype(np.float32).tobytes()
+                audio_bytes = combined_audio.astype(np.float32).tobytes()
+                
+                # 添加元数据
+                metadata = {
+                    'samples_found': samples_found,
+                    'required_samples': required_samples,
+                    'completeness': completeness,
+                    'sample_rate': self.sample_rate,
+                    'audio_format': 'float32',
+                    'num_channels': 1
+                }
+                
+                return audio_bytes, metadata
             else:
                 logger.warning(f"无法找到样本范围 {start_sample}-{end_sample} 的音频数据")
-                return b''
+                return b'', {
+                    'samples_found': 0,
+                    'required_samples': required_samples,
+                    'completeness': 0,
+                    'sample_rate': self.sample_rate,
+                    'audio_format': 'float32',
+                    'num_channels': 1
+                }
                 
         except Exception as e:
             logger.error(f"提取音频段时出错: {e}")
-            return b''
+            import traceback
+            logger.error(traceback.format_exc())
+            return b'', {
+                'samples_found': 0,
+                'required_samples': required_samples if 'required_samples' in locals() else 0,
+                'completeness': 0,
+                'sample_rate': self.sample_rate,
+                'audio_format': 'float32',
+                'num_channels': 1,
+                'error': str(e)
+            }
     
     def _convert_to_segments(self, vad_results: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """

@@ -150,7 +150,7 @@ class ContinuousAudioProcessor:
         # 这会自动处理WAV头部并提取采样率
         audio_data, sample_rate = sf.read(wav_io)
          # 确保音频是float32格式
-        logger.info(f"data is {audio_data.dtype}")
+        logger.debug(f"data is {audio_data.dtype}")
         if audio_data.dtype != np.float32:
             audio_data = audio_data.astype(np.float32)
         
@@ -180,7 +180,7 @@ class ContinuousAudioProcessor:
             self.audio_buffers[stream_id].extend(audio_data)
             buffer_size = len(self.audio_buffers[stream_id])
             
-            logger.info(f"-------》 接收到音频数据: {len(audio_data)}字节, 当前缓冲区大小: {len(self.audio_buffers[stream_id])}字节 处理入口是 {PROCESSING_CHUNK_SIZE}")
+            logger.debug(f"-------》 接收到音频数据: {len(audio_data)}字节, 当前缓冲区大小: {len(self.audio_buffers[stream_id])}字节 处理入口是 {PROCESSING_CHUNK_SIZE}")
             
             # 步骤2: 当缓冲区大小达到处理块大小时，处理数据
             while len(self.audio_buffers[stream_id]) >= PROCESSING_CHUNK_SIZE:
@@ -192,12 +192,12 @@ class ContinuousAudioProcessor:
                 # 转换为numpy数组 - VAC处理器需要numpy数组格式
                 audio_np = np.frombuffer(chunk_data, dtype=np.float32)
                 
-                logger.info(f"处理音频块: 大小={len(audio_np)}, 准备添加到VAC队列")
+                logger.debug(f"处理音频块: 大小={len(audio_np)}, 准备添加到VAC队列")
                 
                 # 步骤3: 将处理块添加到VAC队列 - 这是关键步骤，将数据传递给VAC处理器
                 # VAC队列是连接音频缓冲区和VAC处理器的桥梁
                 await self.vac_queues[stream_id].put(audio_np)
-                logger.info(f"音频块已添加到VAC队列，当前队列大小: {self.vac_queues[stream_id].qsize()}")
+                logger.debug(f"音频块已添加到VAC队列，当前队列大小: {self.vac_queues[stream_id].qsize()}")
             
             return {
                 "status": "processing",
@@ -239,7 +239,7 @@ class ContinuousAudioProcessor:
                     # 这个方法是VAC处理器获取数据的入口点
                     # 每当VAC处理器需要下一个音频块时，它会调用这个方法
                     try:
-                        logger.info(f"VAC处理器请求下一个音频块 (已处理: {self.chunks_processed})")
+                        logger.debug(f"VAC处理器请求下一个音频块 (已处理: {self.chunks_processed})")
                         
                         # 使用run_coroutine_threadsafe从队列获取数据
                         # 这是线程安全的方式，因为VAC处理器在单独的线程中运行
@@ -247,7 +247,7 @@ class ContinuousAudioProcessor:
                             self.queue.get(), self.loop
                         )
                         # 等待数据，最多5秒
-                        logger.info("等待队列中的音频数据...")
+                        logger.debug("等待队列中的音频数据...")
                         chunk = future.result(timeout=5)  # 5秒超时
                         
                         # None表示流结束
@@ -256,7 +256,7 @@ class ContinuousAudioProcessor:
                             raise StopIteration
                         
                         self.chunks_processed += 1
-                        logger.info(f"VAC处理器获取到音频块 #{self.chunks_processed}, 大小={len(chunk)}")
+                        logger.debug(f"VAC处理器获取到音频块 #{self.chunks_processed}, 大小={len(chunk)}")
                         
                         # 返回音频块给VAC处理器
                         # 这里是VAC处理器实际获取数据的地方
@@ -328,7 +328,29 @@ class ContinuousAudioProcessor:
     
     def _on_speech_segment(self, segment: Dict[str, Any]):
         """语音段检测回调"""
-        logger.info(f"检测到语音段: {segment['start']:.2f}秒 - {segment['end']:.2f}秒, 持续时间: {segment['duration']:.2f}秒")
+        logger.info(f"_on_speech_segment 检测到语音段: {segment['start']:.2f}秒 - {segment['end']:.2f}秒, 持续时间: {segment['duration']:.2f}秒")
+        
+        # 验证音频数据完整性
+        has_audio = 'audio_bytes' in segment and len(segment['audio_bytes']) > 0
+        audio_size = len(segment['audio_bytes']) if has_audio else 0
+        
+        # 获取音频元数据
+        audio_metadata = segment.get('audio_metadata', {})
+        completeness = audio_metadata.get('completeness', 0) if audio_metadata else 0
+        
+        # 记录音频数据信息
+        if has_audio:
+            logger.info(f"音频数据: {audio_size} 字节, 完整性: {completeness:.1f}%")
+            if completeness < 90:
+                logger.warning(f"音频数据不完整，可能影响后续处理")
+        else:
+            logger.warning(f"语音段没有音频数据")
+        
+        # 存储音频数据并获取段ID
+        segment_id = None
+        if has_audio:
+            segment_id = self._store_audio_segment(segment)
+            logger.info(f"已存储音频段，ID: {segment_id}")
         
         # 为所有活跃连接发送结果
         for stream_id, websocket in self.active_connections.items():
@@ -354,9 +376,18 @@ class ContinuousAudioProcessor:
                 "duration": segment['duration'],
                 "transcript": f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
                 "timestamp": datetime.now().isoformat(),
-                "has_audio": True if 'audio_bytes' in segment and len(segment['audio_bytes']) > 0 else False,
-                "audio_size": len(segment['audio_bytes']) if 'audio_bytes' in segment else 0
+                "has_audio": has_audio,
+                "audio_size": audio_size,
+                "audio_format": segment.get('audio_format', 'float32'),
+                "sample_rate": segment.get('sample_rate', 16000),
+                "num_channels": segment.get('num_channels', 1),
+                "completeness": completeness,
+                "is_final": segment.get('is_final', False)
             }
+            
+            # 如果有音频段ID，添加到结果中
+            if segment_id:
+                result_data["segment_id"] = segment_id
             
             # 使用线程安全的方式调度协程
             try:
@@ -371,13 +402,89 @@ class ContinuousAudioProcessor:
     async def _send_result(self, websocket: WebSocketServerProtocol, stream_id: str, result: Dict[str, Any]):
         """发送结果到客户端"""
         try:
-            await websocket.send(json.dumps({
+            # 如果需要，可以将音频数据转换为Base64以便通过JSON发送
+            # 注意：这里我们不直接发送音频数据，因为它可能很大，而是提供一个标志让客户端知道有音频可用
+            # 客户端可以通过单独的请求获取音频数据
+            
+            # 创建响应数据
+            response_data = {
                 "type": "transcription_result",
                 "stream_id": stream_id,
-                "result": result
+                "result": result,
+                "timestamp": datetime.now().isoformat()
+            }
+    # 添加在ContinuousAudioProcessor类中，_send_result方法之后
+    
+    # 存储最近的语音段音频数据，用于按需获取
+    # 格式: {segment_id: {'audio_bytes': bytes, 'metadata': dict}}
+    _recent_audio_segments = {}
+    _max_stored_segments = 50  # 最多存储的段数
+    
+    def _store_audio_segment(self, segment: Dict[str, Any]) -> str:
+        """存储语音段音频数据，返回段ID"""
+        if 'audio_bytes' not in segment or not segment['audio_bytes']:
+            return None
+            
+        # 生成唯一ID
+        segment_id = str(uuid.uuid4())
+        
+        # 存储音频数据和元数据
+        self._recent_audio_segments[segment_id] = {
+            'audio_bytes': segment['audio_bytes'],
+            'metadata': {
+                'start': segment['start'],
+                'end': segment['end'],
+                'duration': segment['duration'],
+                'sample_rate': segment.get('sample_rate', 16000),
+                'audio_format': segment.get('audio_format', 'float32'),
+                'num_channels': segment.get('num_channels', 1),
+                'timestamp': datetime.now().isoformat()
+            }
+        }
+        
+        # 如果存储的段数超过限制，删除最旧的
+        if len(self._recent_audio_segments) > self._max_stored_segments:
+            oldest_key = next(iter(self._recent_audio_segments))
+            del self._recent_audio_segments[oldest_key]
+            
+        return segment_id
+        
+    async def handle_audio_request(self, websocket: WebSocketServerProtocol, segment_id: str):
+        """处理音频数据请求"""
+        if segment_id not in self._recent_audio_segments:
+            await websocket.send(json.dumps({
+                "type": "audio_data_response",
+                "status": "error",
+                "error": "找不到请求的音频段",
+                "segment_id": segment_id
             }))
+            return
+            
+        # 获取存储的音频数据
+        audio_data = self._recent_audio_segments[segment_id]
+        
+        # 将音频数据转换为Base64
+        import base64
+        audio_base64 = base64.b64encode(audio_data['audio_bytes']).decode('utf-8')
+        
+        # 发送响应
+        await websocket.send(json.dumps({
+            "type": "audio_data_response",
+            "status": "success",
+            "segment_id": segment_id,
+            "audio_base64": audio_base64,
+            "metadata": audio_data['metadata']
+        }))
+        
+        logger.info(f"已发送音频段 {segment_id} 的数据，大小: {len(audio_data['audio_bytes'])} 字节")            
+            # 发送JSON响应
+            await websocket.send(json.dumps(response_data))
+            
+            logger.debug(f"已向客户端 {stream_id} 发送结果: {result['type']}")
         except Exception as e:
             logger.error(f"向客户端发送结果时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
 
 
 class WebSocketServer:
@@ -432,7 +539,7 @@ class WebSocketServer:
             data = json.loads(message)
             message_type = data.get("type")
             
-            logger.info(f"收到来自 {connection_id} 的文本消息: {message_type}")
+            logger.debug(f"收到来自 {connection_id} 的文本消息: {message_type}")
             
             if message_type == "start_stream":
                 # 开始新的音频流
@@ -441,6 +548,45 @@ class WebSocketServer:
                 await websocket.send(json.dumps({
                     "type": "stream_started",
                     "stream_id": stream_id
+                }))
+                return stream_id
+            
+            elif message_type == "stop_stream":
+                # 停止现有的音频流
+                stream_id = data.get("stream_id")
+                if stream_id:
+                    await self.audio_processor.stop_stream(stream_id)
+                    await websocket.send(json.dumps({
+                        "type": "stream_stopped",
+                        "stream_id": stream_id
+                    }))
+            
+            elif message_type == "ping":
+                # 简单的ping-pong测试
+                await websocket.send(json.dumps({
+                    "type": "pong",
+                    "timestamp": datetime.now().isoformat()
+                }))
+            
+            elif message_type == "get_audio_data":
+                # 处理音频数据请求
+                segment_id = data.get("segment_id")
+                if segment_id:
+                    await self.audio_processor.handle_audio_request(websocket, segment_id)
+                else:
+                    await websocket.send(json.dumps({
+                        "type": "error",
+                        "error": "请求音频数据时未提供segment_id"
+                    }))
+            
+            else:
+                logger.warning(f"未知消息类型: {message_type}")
+                await websocket.send(json.dumps({
+                    "type": "error",
+                    "error": f"未知消息类型: {message_type}"
+                }))
+            
+            return None
                 }))
                 return stream_id
             
