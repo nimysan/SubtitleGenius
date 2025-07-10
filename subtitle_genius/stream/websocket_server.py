@@ -35,6 +35,14 @@ class ContinuousAudioProcessor:
     """处理连续音频流的处理器"""
     
     def __init__(self):
+        # 存储主事件循环，用于线程安全操作
+        try:
+            self.main_loop = asyncio.get_running_loop()
+            logger.info("已获取主事件循环引用")
+        except RuntimeError:
+            logger.warning("初始化时未找到运行中的事件循环，将在首次使用时获取")
+            self.main_loop = None
+            
         # 初始化VAC处理器，设置回调函数
         self.vac_processor = VACProcessor(
             threshold=0.3,
@@ -61,6 +69,11 @@ class ContinuousAudioProcessor:
     async def start_stream(self, stream_id: str, websocket: WebSocketServerProtocol):
         """开始一个新的音频流处理"""
         logger.info(f"开始新的音频流: {stream_id}")
+        
+        # 确保我们有主事件循环的引用
+        if self.main_loop is None:
+            self.main_loop = asyncio.get_running_loop()
+            logger.info("已在start_stream中获取主事件循环引用")
         
         # 存储连接信息
         self.active_connections[stream_id] = websocket
@@ -319,21 +332,41 @@ class ContinuousAudioProcessor:
         
         # 为所有活跃连接发送结果
         for stream_id, websocket in self.active_connections.items():
-            # 创建异步任务发送结果
-            asyncio.create_task(self._send_result(
-                websocket,
-                stream_id,
-                {
-                    "type": "speech_segment",
-                    "start": segment['start'],
-                    "end": segment['end'],
-                    "duration": segment['duration'],
-                    "transcript": f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
-                    "timestamp": datetime.now().isoformat(),
-                    "has_audio": True if 'audio_bytes' in segment and len(segment['audio_bytes']) > 0 else False,
-                    "audio_size": len(segment['audio_bytes']) if 'audio_bytes' in segment else 0
-                }
-            ))
+            # 获取事件循环 - 优先使用存储的主循环
+            loop = self.main_loop
+            
+            # 如果主循环未设置，尝试获取当前运行的循环
+            if loop is None:
+                try:
+                    loop = asyncio.get_running_loop()
+                    # 更新主循环引用以便后续使用
+                    self.main_loop = loop
+                    logger.info("已更新主事件循环引用")
+                except RuntimeError:
+                    logger.error("无法获取事件循环，无法发送语音段结果")
+                    return
+            
+            # 准备结果数据
+            result_data = {
+                "type": "speech_segment",
+                "start": segment['start'],
+                "end": segment['end'],
+                "duration": segment['duration'],
+                "transcript": f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
+                "timestamp": datetime.now().isoformat(),
+                "has_audio": True if 'audio_bytes' in segment and len(segment['audio_bytes']) > 0 else False,
+                "audio_size": len(segment['audio_bytes']) if 'audio_bytes' in segment else 0
+            }
+            
+            # 使用线程安全的方式调度协程
+            try:
+                asyncio.run_coroutine_threadsafe(
+                    self._send_result(websocket, stream_id, result_data),
+                    loop
+                )
+                logger.debug(f"已安排发送语音段结果到客户端 {stream_id}")
+            except Exception as e:
+                logger.error(f"安排发送语音段结果时出错: {e}")
     
     async def _send_result(self, websocket: WebSocketServerProtocol, stream_id: str, result: Dict[str, Any]):
         """发送结果到客户端"""
