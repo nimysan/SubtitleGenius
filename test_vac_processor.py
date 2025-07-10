@@ -589,7 +589,7 @@ def plot_segments_comparison(batch_segments, chunked_segments, continuous_segmen
     
     # Plot audio waveform as background
     try:
-        audio_data, sample_rate = sf.read("chinese_180s.wav")
+        audio_data, sample_rate = sf.read("arabic-long-3min.wav")
         if len(audio_data.shape) > 1:
             audio_data = audio_data[:, 0]  # Convert to mono
         
@@ -807,7 +807,7 @@ def test_different_chunk_sizes(audio_data, sample_rate=16000, batch_results=None
 def main():
     """Main function"""
     # Audio file path
-    audio_file = "chinese_180s.wav"
+    audio_file = "arabic-long-3min.wav"
     
     # Load audio file
     audio_data, sample_rate = load_audio_file(audio_file)

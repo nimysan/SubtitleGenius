@@ -33,7 +33,7 @@ class VACProcessor:
     
     def __init__(
         self,
-        threshold: float = 0.3,
+        threshold: float = 0.5,
         min_silence_duration_ms: int = 300,
         speech_pad_ms: int = 100,
         sample_rate: int = 16000,
