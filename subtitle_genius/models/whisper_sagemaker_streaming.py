@@ -347,7 +347,7 @@ class WhisperSageMakerStreamingModel(BaseModel):
                                 end=segment_end,
                                 text=new_text.strip()
                             )
-                            logger.info(f"最终字幕: {subtitle}")
+                            logger.debug(f"最终字幕: {subtitle}")
                             return subtitle
                 return None
         

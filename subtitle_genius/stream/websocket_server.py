@@ -765,12 +765,12 @@ class WebSocketServer:
         try:
             # 保存音频块到文件
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-            filename = f"{AUDIO_DIR}/{connection_id}_{timestamp}.wav"
+            # filename = f"{AUDIO_DIR}/{connection_id}_{timestamp}.wav"
             
-            with open(filename, "wb") as f:
-                f.write(message)
+            # with open(filename, "wb") as f:
+            #     f.write(message)
             
-            logger.info(f"收到来自 {connection_id} 的音频块: {len(message)}字节, 保存到 {filename}")
+            # logger.info(f"收到来自 {connection_id} 的音频块: {len(message)}字节, 保存到 {filename}")
             
             # 如果没有流ID，自动创建一个
             if not stream_id:
