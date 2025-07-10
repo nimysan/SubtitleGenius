@@ -16,9 +16,9 @@ from websockets.server import WebSocketServerProtocol
 from subtitle_genius.stream.vac_processor import VACProcessor
 # 导入SageMaker Whisper流式处理模型
 from subtitle_genius.models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel
-# 导入音频段处理器
-from subtitle_genius.core.segment_processor import AudioSegmentProcessor
-from subtitle_genius.core.segment_processor_config import AudioSegmentProcessorConfig
+# 导入SubtitlePipeline和Subtitle
+from subtitle_genius.pipeline.subtitle_pipeline import SubtitlePipeline
+from subtitle_genius.subtitle.models import Subtitle
 
 # 配置日志
 logging.basicConfig(
@@ -47,6 +47,19 @@ class ContinuousAudioProcessor:
         except RuntimeError:
             logger.warning("初始化时未找到运行中的事件循环，将在首次使用时获取")
             self.main_loop = None
+        
+        # 创建SubtitlePipeline实例，用于处理字幕
+        self.subtitle_pipeline = SubtitlePipeline(
+            source_language="zh",  # 源语言：中文
+            target_language="zh",  # 目标语言：中文
+            correction_enabled=True,  # 启用纠正
+            correction_service="bedrock",
+            translation_enabled=False,  # 不启用翻译
+            translation_service="bedrock",
+            scene_description="足球比赛",  # 场景描述：足球比赛
+            output_format="srt"
+        )
+        logger.info("SubtitlePipeline初始化完成")
             
         # 初始化VAC处理器，设置回调函数
         self.vac_processor = VACProcessor(
@@ -88,24 +101,6 @@ class ContinuousAudioProcessor:
         except Exception as e:
             logger.error(f"初始化SageMaker Whisper模型失败: {e}")
             self.whisper_model = None
-            
-        # 初始化AudioSegmentProcessor
-        try:
-            # 创建配置 - 使用默认配置，不传递参数
-            segment_processor_config = AudioSegmentProcessorConfig()
-            
-            # 手动设置一些关键配置（如果需要覆盖默认值）
-            segment_processor_config.transcribe_model = "whisper-sagemaker-streaming"
-            segment_processor_config.source_language = os.environ.get("SUBTITLE_LANGUAGE", "zh")
-            segment_processor_config.correction_enabled = True
-            segment_processor_config.translation_enabled = os.environ.get("TRANSLATION_ENABLED", "false").lower() == "true"
-            
-            # 创建处理器
-            self.segment_processor = AudioSegmentProcessor(config=segment_processor_config)
-            logger.info(f"AudioSegmentProcessor初始化成功")
-        except Exception as e:
-            logger.error(f"初始化AudioSegmentProcessor失败: {e}")
-            self.segment_processor = None
         
         logger.info("ContinuousAudioProcessor初始化完成")
     
@@ -426,38 +421,47 @@ class ContinuousAudioProcessor:
         transcript = ""
         translated_text = None
         
-        # 使用AudioSegmentProcessor
-        if has_audio and self.segment_processor is not None:
-            try:
-                # 将音频数据转换为numpy数组
-                audio_data = np.frombuffer(segment['audio_bytes'], dtype=np.float32)
+        # 使用whisper_sagemaker转录并使用SubtitlePipeline优化
+        try:
+            # 将音频数据转换为numpy数组
+            audio_data = np.frombuffer(segment['audio_bytes'], dtype=np.float32)
+            
+            # 使用whisper_sagemaker模型转录
+            if self.whisper_model:
+                # 转录音频
+                logger.info(f"使用WhisperSageMakerStreamingModel转录音频段: {segment['start']:.2f}s - {segment['end']:.2f}s")
+                transcript = await self.whisper_model.transcribe(
+                    audio_data, 
+                    language="zh"  # 使用中文
+                )
+                logger.info(f"转录结果: {transcript}")
                 
-                # 使用AudioSegmentProcessor处理音频段
-                logger.info(f"使用AudioSegmentProcessor处理音频段，开始时间: {segment['start']}")
-                subtitle = await self.segment_processor.process_segment(
-                    audio_segment=audio_data,
-                    timestamp=segment['start']
+                # 创建Subtitle对象
+                subtitle = Subtitle(
+                    start=segment['start'],
+                    end=segment['end'],
+                    text=transcript
                 )
                 
-                # 获取处理结果
-                transcript = subtitle.text
-                translated_text = subtitle.translated_text
+                processed_subtitle = await self.subtitle_pipeline.process_subtitle(subtitle)
                 
-                logger.info(f"处理结果: 转录={transcript}, 翻译={translated_text}")
+                # 从处理后的字幕中获取结果
+                transcript = processed_subtitle.text
+                translated_text = processed_subtitle.translated_text
                 
-                # 将字幕写入WebVTT文件
-                if transcript:
-                    self._write_subtitle_to_webvtt(
-                        start=segment['start'],
-                        end=segment['end'],
-                        text=transcript
-                    )
-            except Exception as e:
-                logger.error(f"使用AudioSegmentProcessor处理音频段时出错: {e}")
-                import traceback
-                logger.error(traceback.format_exc())
-        else:
-            logger.warning(f"无法处理音频段: AudioSegmentProcessor未初始化")
+                logger.info(f"处理后的字幕: {transcript}")
+                if translated_text:
+                    logger.info(f"翻译后的字幕: {translated_text}")
+            else:
+                logger.warning("WhisperSageMakerStreamingModel未初始化，无法转录")
+                transcript = f"[未转录的语音段: {segment['start']:.2f}s - {segment['end']:.2f}s]"
+                translated_text = None
+        except Exception as e:
+            logger.error(f"处理音频段时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
+            transcript = f"[转录错误: {str(e)}]"
+            translated_text = None
         
         # 为所有活跃连接发送结果
         for stream_id, websocket in self.active_connections.items():
