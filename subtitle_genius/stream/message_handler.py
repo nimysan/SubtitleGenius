@@ -216,16 +216,23 @@ class MessageHandler:
             # 设置回调函数
             self.vac_processor.on_speech_segment = on_speech_segment
             
-            # 将单个音频数据转换为迭代器，以便传递给process_streaming_audio
+            chunk_size = int(0.128 * sample_rate)
+            
+            # 强制检查：确保chunk_size是512的整数倍
+            VAD_CHUNK_SIZE = 512  # Silero VAD要求的块大小
+            if chunk_size % VAD_CHUNK_SIZE != 0:
+                raise ValueError(
+                    f"chunk_size必须是{VAD_CHUNK_SIZE}的整数倍！当前值为{chunk_size}。"
+                    f"请调整chunk_duration为{VAD_CHUNK_SIZE/sample_rate}的整数倍，"
+                    f"例如{VAD_CHUNK_SIZE/sample_rate*3}秒或{VAD_CHUNK_SIZE/sample_rate*4}秒。"
+                )
+            
+            
+            # 创建一个生成器，模拟流式输入
             def audio_stream_generator():
-                # 打印音频数据的统计信息，帮助调试
-                print(f"音频数据统计: 最小值={np.min(audio_data):.4f}, 最大值={np.max(audio_data):.4f}, 均值={np.mean(audio_data):.4f}, 标准差={np.std(audio_data):.4f}")
-                
-                # 检查音频数据是否包含语音（简单检查：是否有足够的变化）
-                if np.std(audio_data) < 0.01:
-                    print("警告: 音频数据变化很小，可能不包含语音")
-                
-                yield audio_data
+                for i in range(0, len(audio_data), chunk_size):
+                    chunk = audio_data[i:min(i+chunk_size, len(audio_data))]
+                    yield chunk
             
             # 创建音频流迭代器
             audio_stream = audio_stream_generator()
