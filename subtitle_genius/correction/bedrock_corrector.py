@@ -6,8 +6,12 @@ import json
 import os
 import boto3
 import asyncio
+import logging
 from typing import Optional, Dict, Any
 from .base import SubtitleCorrectionService, CorrectionInput, CorrectionOutput
+
+# 配置日志
+logger = logging.getLogger(__name__)
 
 
 class BedrockCorrectionService(SubtitleCorrectionService):
@@ -17,14 +21,22 @@ class BedrockCorrectionService(SubtitleCorrectionService):
         self.model_id = model_id
         self.service_name = "bedrock_claude"
         
+        logger.info(f"初始化BedrockCorrectionService，模型ID: {model_id}")
+        
         # 初始化Bedrock客户端
         try:
+            aws_region = os.getenv("AWS_REGION", "us-east-1")
+            logger.info(f"正在初始化Bedrock客户端，区域: {aws_region}")
+            
             self.bedrock_runtime = boto3.client(
                 service_name="bedrock-runtime",
-                region_name=os.getenv("AWS_REGION", "us-east-1")
+                region_name=aws_region
             )
+            logger.info("✅ Bedrock客户端初始化成功")
+            
         except Exception as e:
-            print(f"警告: 无法初始化Bedrock客户端: {e}")
+            logger.error(f"❌ 无法初始化Bedrock客户端: {e}")
+            logger.warning("将使用模拟纠错作为备用方案")
             self.bedrock_runtime = None
     
     # 语言配置映射
@@ -70,13 +82,22 @@ class BedrockCorrectionService(SubtitleCorrectionService):
     async def correct(self, input_data: CorrectionInput) -> CorrectionOutput:
         """使用Bedrock Claude进行字幕纠错"""
         
+        logger.info(f"🔧 开始字幕纠错处理")
+        logger.info(f"  - 原始字幕: '{input_data.current_subtitle}'")
+        logger.info(f"  - 语言: {input_data.language}")
+        logger.info(f"  - 场景: {input_data.scene_description}")
+        logger.info(f"  - 历史字幕数量: {len(input_data.history_subtitles) if input_data.history_subtitles else 0}")
+        
         # 如果没有Bedrock客户端，使用模拟纠错
         if not self.bedrock_runtime:
+            logger.warning("⚠️  Bedrock客户端不可用，使用模拟纠错")
             return await self._mock_correction(input_data)
         
         try:
+            logger.debug("构建纠错提示词...")
             # 构建纠错提示词
             prompt = self._build_correction_prompt(input_data)
+            logger.debug(f"提示词长度: {len(prompt)} 字符")
             
             # 构建消息序列 - 修正格式
             messages = [
@@ -90,11 +111,30 @@ class BedrockCorrectionService(SubtitleCorrectionService):
                 }
             ]
             
+            logger.info("📡 调用Bedrock Converse API...")
             # 调用Bedrock Converse API
             response = await self._call_bedrock_converse(messages)
+            logger.info("✅ Bedrock API调用成功")
             
+            logger.debug("解析纠错响应...")
             # 解析响应
             result = self._parse_correction_response(response, input_data.current_subtitle)
+            
+            # 记录纠错结果
+            logger.info(f"🎯 纠错完成:")
+            logger.info(f"  - 纠正后字幕: '{result.get('corrected_text', input_data.current_subtitle)}'")
+            logger.info(f"  - 是否有纠正: {result.get('has_correction', False)}")
+            logger.info(f"  - 置信度: {result.get('confidence', 0.8):.2f}")
+            logger.info(f"  - 是否拆分: {result.get('has_split', False)}")
+            
+            if result.get('has_split', False):
+                split_subtitles = result.get('split_subtitles', [])
+                logger.info(f"  - 拆分结果 ({len(split_subtitles)} 个句子):")
+                for i, subtitle in enumerate(split_subtitles, 1):
+                    logger.info(f"    {i}. '{subtitle}'")
+            
+            if result.get('details'):
+                logger.info(f"  - 纠正详情: {result.get('details')}")
             
             return CorrectionOutput(
                 corrected_subtitle=result.get("corrected_text", input_data.current_subtitle),
@@ -106,23 +146,33 @@ class BedrockCorrectionService(SubtitleCorrectionService):
             )
             
         except Exception as e:
-            print(f"Bedrock纠错失败，使用备用方案: {e}")
+            logger.error(f"❌ Bedrock纠错失败: {e}")
+            logger.exception("详细错误信息:")
+            logger.warning("🔄 切换到备用纠错方案")
             return await self._mock_correction(input_data)
     
     def _build_correction_prompt(self, input_data: CorrectionInput) -> str:
         """构建多语言纠错提示词"""
         
+        logger.debug(f"构建纠错提示词，语言: {input_data.language}")
+        
         # 获取语言配置
         lang_config = self.LANGUAGE_CONFIGS.get(input_data.language, self.LANGUAGE_CONFIGS["ar"])
         language_name = lang_config["name"]
+        
+        logger.debug(f"使用语言配置: {language_name}")
         
         # 构建历史上下文
         history_context = ""
         if input_data.history_subtitles:
             recent_history = input_data.history_subtitles[-3:]  # 最近3条
             history_context = f"\n\n历史字幕上下文:\n" + "\n".join(f"- {h}" for h in recent_history)
+            logger.debug(f"添加历史上下文，包含 {len(recent_history)} 条历史字幕")
+        else:
+            logger.debug("无历史字幕上下文")
         
         # 场景相关的纠错指导
+        logger.debug(f"获取场景指导，场景: {input_data.scene_description}")
         scene_guidance = self._get_scene_guidance(input_data.scene_description, input_data.language)
         
         prompt = f"""{lang_config["assistant_role"]}。请纠正以下{language_name}字幕中的错误。
@@ -160,6 +210,7 @@ class BedrockCorrectionService(SubtitleCorrectionService):
 如果字幕没有错误，请返回原文本并设置has_correction为false。
 如果字幕不需要拆分（句子较短或已经是简短句子），请设置has_split为false并保持split_subtitles为空数组。"""
         
+        logger.debug(f"提示词构建完成，总长度: {len(prompt)} 字符")
         return prompt
     
     def _get_scene_guidance(self, scene_description: str, language: str = "ar") -> str:
