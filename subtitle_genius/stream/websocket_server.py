@@ -1,358 +1,530 @@
-"""WebSocket服务器，用于接收和处理音频流"""
-
 import asyncio
 import json
 import logging
 import os
+import io
 import uuid
-import datetime
-import tempfile
-from pathlib import Path
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query
-from fastapi.middleware.cors import CORSMiddleware
-from typing import Dict, List, Optional, Any
-from dotenv import load_dotenv
+import numpy as np
+import soundfile as sf
+from datetime import datetime
+from typing import Dict, Any, Optional, List, Iterator
 
-# 加载环境变量
-load_dotenv()
+import websockets
+from websockets.server import WebSocketServerProtocol
 
-# 导入自定义模块
-from .vac_processor import VACProcessor
-from .subtitle_processor import SubtitleProcessor
-from .message_handler import MessageHandler
-from ..audio.processor import AudioProcessor
-from ..models.transcribe_model import TranscribeModel
-from ..models.whisper_sagemaker_streaming import WhisperSageMakerStreamConfig
-from ..correction import BedrockCorrectionService
-from translation_service import translation_manager
+# 导入VAC处理器
+from subtitle_genius.stream.vac_processor import VACProcessor
 
 # 配置日志
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# 创建FastAPI应用
-app = FastAPI(title="SubtitleGenius WebSocket API")
-
-# 添加CORS中间件
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源，生产环境中应该限制
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
+logger = logging.getLogger("websocket_server")
 
-# SageMaker Whisper 配置
-SAGEMAKER_ENDPOINT = os.getenv("SAGEMAKER_ENDPOINT", "endpoint-quick-start-z9afg")
-AWS_REGION = os.getenv("AWS_REGION", "us-east-1")
-SAGEMAKER_CHUNK_DURATION = int(os.getenv("SAGEMAKER_CHUNK_DURATION", "10"))
+# 存储接收到的音频文件的目录
+AUDIO_DIR = "received_audio"
+os.makedirs(AUDIO_DIR, exist_ok=True)
 
-# 临时文件目录
-temp_dir = Path(tempfile.gettempdir()) / "subtitle_genius"
-os.makedirs(temp_dir, exist_ok=True)
+# 定义处理块大小 (512*8 = 4096字节)
+PROCESSING_CHUNK_SIZE = 512 * 8
 
-# 字幕输出目录
-subtitle_dir = Path("./subtitles")
-os.makedirs(subtitle_dir, exist_ok=True)
 
-# 全局实例
-audio_processor = AudioProcessor()
-vac_processor = None
-subtitle_processor = None
-message_handler = None
-sagemaker_whisper_model = None
-correction_service = None
 
-@app.on_event("startup")
-async def startup_event():
-    """应用启动时初始化模型和处理器"""
-    global sagemaker_whisper_model, correction_service, vac_processor, subtitle_processor, message_handler
+class ContinuousAudioProcessor:
+    """处理连续音频流的处理器"""
     
-    # 初始化VAC处理器
-    try:
-        vac_processor = VACProcessor()
-        logger.info("VAC处理器已初始化")
-    except Exception as e:
-        logger.error(f"VAC处理器初始化失败: {e}")
-        vac_processor = None
+    def __init__(self):
+        # 初始化VAC处理器，设置回调函数
+        self.vac_processor = VACProcessor(
+            threshold=0.3,
+            min_silence_duration_ms=300,
+            speech_pad_ms=100,
+            sample_rate=16000,
+            processing_chunk_size=512,  # VAC处理器的处理块大小
+            no_audio_input_threshold=5.0,
+            on_speech_segment=self._on_speech_segment
+        )
+        # 存储活跃的连接
+        self.active_connections = {}
+        # 音频缓冲区 - 每个流一个缓冲区
+        self.audio_buffers = {}
+        # 处理任务
+        self.processing_tasks = {}
+        # 结束标志
+        self.end_flags = {}
+        # 音频队列 - 用于VAC处理器
+        self.vac_queues = {}
+        
+        logger.info("ContinuousAudioProcessor初始化完成")
     
-    # 初始化SageMaker Whisper模型
-    try:
-        # 配置参数
-        config = WhisperSageMakerStreamConfig(
-            chunk_duration=30,      # 每duration秒处理一次
-            overlap_duration=0,    # 2秒重叠避免截断
-            voice_threshold=0.01,    # 语音检测阈值
-            sagemaker_chunk_duration=SAGEMAKER_CHUNK_DURATION  # SageMaker 端点处理的块大小
+    async def start_stream(self, stream_id: str, websocket: WebSocketServerProtocol):
+        """开始一个新的音频流处理"""
+        logger.info(f"开始新的音频流: {stream_id}")
+        
+        # 存储连接信息
+        self.active_connections[stream_id] = websocket
+        # 初始化音频缓冲区
+        self.audio_buffers[stream_id] = bytearray()
+        # 创建VAC处理队列
+        self.vac_queues[stream_id] = asyncio.Queue()
+        # 设置结束标志
+        self.end_flags[stream_id] = False
+        
+        # 创建处理任务 - 确保立即启动VAC处理器
+        self.processing_tasks[stream_id] = asyncio.create_task(
+            self._process_audio_stream(stream_id)
         )
         
-        # 创建模型 (使用 SageMaker Whisper 后端)
-        sagemaker_whisper_model = TranscribeModel(
-            backend="sagemaker_whisper",
-            sagemaker_endpoint=SAGEMAKER_ENDPOINT,
-            region_name=AWS_REGION,
-            whisper_config=config
-        )
-        logger.info(f"SageMaker Whisper模型已初始化 config is {config}")
-        if sagemaker_whisper_model.is_available():
-            logger.info("SageMaker Whisper模型已初始化")
-        else:
-            logger.error(f"SageMaker Whisper模型不可用，请检查端点配置: {SAGEMAKER_ENDPOINT}")
-    except Exception as e:
-        logger.error(f"SageMaker Whisper模型初始化失败: {e}")
-    
-    # 初始化Correction服务 (使用Sonnet模型)
-    try:
-        correction_service = BedrockCorrectionService(
-            model_id="us.anthropic.claude-3-5-sonnet-20240620-v1:0"
-        )
-        logger.info("Bedrock Correction服务已初始化 (Claude 3.5 Sonnet)")
-    except Exception as e:
-        logger.error(f"Correction服务初始化失败: {e}")
-        correction_service = None
-    
-    # 确保翻译服务可用
-    if "bedrock" in translation_manager.get_available_services():
-        logger.info("Bedrock翻译服务已初始化")
-    else:
-        logger.warning("Bedrock翻译服务不可用，将使用备用翻译服务")
-    
-    # 初始化字幕处理器
-    subtitle_processor = SubtitleProcessor(correction_service=correction_service)
-    logger.info("字幕处理器已初始化")
-    
-    # 初始化消息处理器
-    message_handler = MessageHandler(
-        subtitle_processor=subtitle_processor,
-        vac_processor=vac_processor,
-        whisper_model=sagemaker_whisper_model
-    )
-    logger.info("消息处理器已初始化")
-
-
-@app.websocket("/ws/whisper")
-async def websocket_whisper_endpoint(
-    websocket: WebSocket, 
-    language: str = Query("ar"),
-    correction: bool = Query(True),
-    translation: bool = Query(True),
-    target_language: str = Query("en"),
-    filename: str = Query(None)
-):
-    """Whisper模型WebSocket端点"""
-    global message_handler, vac_processor
-    
-    client_id = str(uuid.uuid4())
-    
-    await websocket.accept()
-    
-    # 注册连接
-    message_handler.register_connection(client_id, websocket)
-    
-    # 重置VAC处理器状态
-    if vac_processor:
-        vac_processor.reset_vad_state()
-        logger.info("VAC处理器已重置")
-    
-    # 如果没有提供文件名，使用时间戳
-    if not filename:
-        filename = f"subtitle_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-    
-    logger.info(f"客户端 {client_id} 已连接到Whisper端点")
-    logger.info(f"接收到的参数:")
-    logger.info(f"  - 视频语言: {language}")
-    logger.info(f"  - 启用纠错: {correction}")
-    logger.info(f"  - 启用翻译: {translation}")
-    logger.info(f"  - 翻译目标语言: {target_language}")
-    logger.info(f"  - 文件名: {filename}")
-    
-    try:
-        # 发送连接确认
-        await websocket.send_json({
-            "type": "connection",
-            "status": "connected",
-            "client_id": client_id,
-            "model": "whisper",
-            "language": language,
-            "correction_enabled": correction,
-            "translation_enabled": translation,
-            "target_language": target_language
-        })
+        # 确保任务已经启动
+        logger.info(f"VAC处理任务已创建: {self.processing_tasks[stream_id]}")
         
-        # 初始化处理状态
-        current_chunk_index = 0
-        pending_timestamp = None
+        # 添加任务完成的回调，以便在任务完成时记录日志
+        self.processing_tasks[stream_id].add_done_callback(
+            lambda t: logger.info(f"VAC处理任务完成状态: {'成功' if not t.exception() else f'失败: {t.exception()}'}")
+        )
         
-        # 处理接收到的消息
-        while True:
+        return stream_id
+    
+    async def stop_stream(self, stream_id: str):
+        """停止音频流处理"""
+        if stream_id in self.processing_tasks:
+            logger.info(f"停止音频流: {stream_id}")
+            
+            # 设置结束标志
+            self.end_flags[stream_id] = True
+            
+            # 向队列添加None表示结束
+            if stream_id in self.vac_queues:
+                await self.vac_queues[stream_id].put(None)
+            
+            # 等待处理任务完成
             try:
-                # 接收消息（可能是文本或二进制）
-                logger.debug(f"等待接收客户端 {client_id} 的消息...")
-                message = await websocket.receive()
-                logger.debug(f"收到消息类型: {message.get('type')}, 消息键: {list(message.keys())}")
-                
-                # 检查消息类型
-                if message["type"] == "websocket.receive":
-                    if "text" in message:
-                        # 处理文本消息（时间戳信息）
-                        logger.info(f"收到文本消息，长度: {len(message['text'])}")
-                        result = await message_handler.handle_text_message(client_id, message['text'])
-                        
-                        # 如果是时间戳消息，更新待处理时间戳
-                        if result and result.get('type') == 'timestamp_received':
-                            timestamp_data = json.loads(message['text']).get('timestamp', {})
-                            pending_timestamp = timestamp_data
-                            logger.info(f"更新待处理时间戳: chunk_index={pending_timestamp.get('chunk_index', 'unknown')}")
-                        
-                        # 如果需要响应，发送响应
-                        if result:
-                            await websocket.send_json(result)
-                            
-                    elif "bytes" in message:
-                        # 处理二进制消息（音频数据）
-                        data = message["bytes"]
-                        logger.info(f"接收到音频数据，大小: {len(data)} bytes, 数据类型: {type(data)}")
-                        
-                        # 处理音频数据
-                        result = await message_handler.handle_binary_message(
-                            client_id=client_id,
-                            binary_data=data,
-                            language=language,
-                            enable_correction=correction,
-                            enable_translation=translation,
-                            target_language=target_language,
-                            pending_timestamp=pending_timestamp,
-                            current_chunk_index=current_chunk_index
-                        )
-                        
-                        # 处理结果
-                        if result:
-                            if result.get('type') == 'audio_processed':
-                                # 音频处理成功，发送字幕结果
-                                for subtitle_result in result.get('results', []):
-                                    await websocket.send_json(subtitle_result)
-                                
-                                # 清除已使用的时间戳
-                                pending_timestamp = None
-                            elif result.get('type') == 'error':
-                                # 处理错误
-                                await websocket.send_json(result)
-                        
-                        # 无论处理结果如何，都增加chunk索引
-                        current_chunk_index += 1
-                    else:
-                        logger.warning(f"未知的消息格式，消息键: {list(message.keys())}")
-                        
-                elif message["type"] == "websocket.disconnect":
-                    logger.info(f"客户端 {client_id} 断开连接")
-                    break
-                else:
-                    logger.warning(f"未知的WebSocket消息类型: {message['type']}")
-                    
-            except WebSocketDisconnect:
-                logger.info(f"客户端 {client_id} WebSocket连接断开")
-                break
-            except Exception as e:
-                logger.error(f"处理消息时出错: {e}")
-                logger.error(f"错误详情: {type(e).__name__}: {str(e)}")
-                import traceback
-                logger.error(f"错误堆栈: {traceback.format_exc()}")
-                
+                await asyncio.wait_for(self.processing_tasks[stream_id], timeout=2.0)
+            except asyncio.TimeoutError:
+                # 如果超时，取消任务
+                self.processing_tasks[stream_id].cancel()
                 try:
-                    await websocket.send_json({
-                        "type": "error",
-                        "message": f"处理消息失败: {str(e)}"
-                    })
-                except Exception as send_error:
-                    logger.error(f"发送错误消息失败: {send_error}")
-                break
+                    await self.processing_tasks[stream_id]
+                except asyncio.CancelledError:
+                    pass
+            
+            # 清理资源
+            del self.processing_tasks[stream_id]
+            if stream_id in self.vac_queues:
+                del self.vac_queues[stream_id]
+            if stream_id in self.audio_buffers:
+                del self.audio_buffers[stream_id]
+            if stream_id in self.end_flags:
+                del self.end_flags[stream_id]
+            if stream_id in self.active_connections:
+                del self.active_connections[stream_id]
     
-    except WebSocketDisconnect:
-        logger.info(f"客户端 {client_id} 断开连接")
-        # 保存字幕文件
+    def bytes_to_audio_data(self, binary_data):
+        """
+        将WebSocket接收到的二进制WAV数据转换为与sf.read()返回格式相同的格式
+        
+        参数:
+            binary_data: WebSocket接收到的二进制数据
+            
+        返回:
+            tuple: (audio_data, sample_rate) - 与sf.read()返回格式相同
+        """
+        # 使用io.BytesIO创建一个内存文件对象
+        wav_io = io.BytesIO(binary_data)
+        
+        # 使用soundfile直接从内存中读取WAV数据
+        # 这会自动处理WAV头部并提取采样率
+        audio_data, sample_rate = sf.read(wav_io)
+         # 确保音频是float32格式
+        logger.info(f"data is {audio_data.dtype}")
+        if audio_data.dtype != np.float32:
+            audio_data = audio_data.astype(np.float32)
+        
+        return audio_data, sample_rate
+    
+    
+    async def process_audio(self, stream_id: str, binary_data: bytes):
+        """
+        处理音频数据 - 这是音频数据从WebSocket进入处理流程的入口
+        
+        流程：
+        1. 接收音频数据 → 添加到缓冲区
+        2. 当缓冲区达到处理块大小时 → 提取块 → 添加到VAC队列
+        3. VAC队列 → ThreadSafeIterator → VAC处理器
+        """
+        if stream_id not in self.active_connections:
+            raise ValueError(f"找不到流 {stream_id}")
+        
         try:
-            subtitle_processor.save_subtitles(client_id, filename, language)
-            logger.info(f"已保存字幕文件: {filename}")
+            
+            audio_data, sample_rate = self.bytes_to_audio_data(binary_data)
+            
+            print(f"音频数据: 形状={audio_data.shape}, 类型={audio_data.dtype}")
+            print(f"采样率: {sample_rate} Hz")
+            print(f"音频时长: {len(audio_data)}长度")
+            # 步骤1: 将音频数据添加到缓冲区
+            self.audio_buffers[stream_id].extend(audio_data)
+            buffer_size = len(self.audio_buffers[stream_id])
+            
+            logger.info(f"-------》 接收到音频数据: {len(audio_data)}字节, 当前缓冲区大小: {len(self.audio_buffers[stream_id])}字节 处理入口是 {PROCESSING_CHUNK_SIZE}")
+            
+            # 步骤2: 当缓冲区大小达到处理块大小时，处理数据
+            while len(self.audio_buffers[stream_id]) >= PROCESSING_CHUNK_SIZE:
+                # 从缓冲区提取一个处理块
+                chunk_data = self.audio_buffers[stream_id][:PROCESSING_CHUNK_SIZE]
+                # 更新缓冲区，移除已处理的数据
+                self.audio_buffers[stream_id] = self.audio_buffers[stream_id][PROCESSING_CHUNK_SIZE:]
+                
+                # 转换为numpy数组 - VAC处理器需要numpy数组格式
+                audio_np = np.frombuffer(chunk_data, dtype=np.float32)
+                
+                logger.info(f"处理音频块: 大小={len(audio_np)}, 准备添加到VAC队列")
+                
+                # 步骤3: 将处理块添加到VAC队列 - 这是关键步骤，将数据传递给VAC处理器
+                # VAC队列是连接音频缓冲区和VAC处理器的桥梁
+                await self.vac_queues[stream_id].put(audio_np)
+                logger.info(f"音频块已添加到VAC队列，当前队列大小: {self.vac_queues[stream_id].qsize()}")
+            
+            return {
+                "status": "processing",
+                "timestamp": datetime.now().isoformat(),
+                "chunk_size": len(audio_data),
+                "buffer_size": len(self.audio_buffers[stream_id]),
+                "queue_size": self.vac_queues[stream_id].qsize()
+            }
+        
         except Exception as e:
-            logger.error(f"保存字幕文件失败: {e}")
-    except Exception as e:
-        logger.error(f"WebSocket错误: {e}")
-    finally:
-        # 清理连接
-        message_handler.unregister_connection(client_id)
-
-
-@app.websocket("/ws/transcribe")
-async def websocket_transcribe_endpoint(
-    websocket: WebSocket, 
-    language: str = Query("ar"),
-    correction: bool = Query(True),
-    translation: bool = Query(True),
-    target_language: str = Query("en"),
-    filename: str = Query(None)
-):
-    """Amazon Transcribe模型WebSocket端点 - 当前不支持"""
-    client_id = str(uuid.uuid4())
+            logger.error(f"处理音频数据时出错: {e}")
+            return {
+                "status": "error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat()
+            }
     
-    await websocket.accept()
-    logger.info(f"客户端 {client_id} 已连接到Transcribe端点，但该功能当前不支持")
-    
-    try:
-        # 发送不支持的功能消息
-        await websocket.send_json({
-            "type": "error",
-            "status": "unsupported",
-            "message": "Amazon Transcribe功能当前不支持，请使用Whisper端点",
-            "client_id": client_id
-        })
+    async def _process_audio_stream(self, stream_id: str):
+        """处理音频流 - 这是VAC处理器被触发的关键方法"""
+        logger.info(f"开始音频流处理: {stream_id}")
         
-        # 等待客户端断开连接
-        while True:
+        try:
+            # 创建一个可以在线程间传递的迭代器
+            # 这个迭代器是关键 - 它从VAC队列中获取数据并提供给VAC处理器
+            class ThreadSafeIterator:
+                def __init__(self, queue, loop, end_flag):
+                    self.queue = queue  # VAC队列，存储待处理的音频块
+                    self.loop = loop    # 事件循环，用于在线程间安全地获取队列数据
+                    self.end_flag = end_flag  # 结束标志
+                    self.chunks_processed = 0  # 处理的块数量
+                    logger.info("线程安全迭代器初始化 - 将作为VAC处理器的数据源")
+                
+                def __iter__(self):
+                    # 使迭代器可迭代
+                    logger.info("VAC处理器调用了迭代器的__iter__方法")
+                    return self
+                
+                def __next__(self):
+                    # 这个方法是VAC处理器获取数据的入口点
+                    # 每当VAC处理器需要下一个音频块时，它会调用这个方法
+                    try:
+                        logger.info(f"VAC处理器请求下一个音频块 (已处理: {self.chunks_processed})")
+                        
+                        # 使用run_coroutine_threadsafe从队列获取数据
+                        # 这是线程安全的方式，因为VAC处理器在单独的线程中运行
+                        future = asyncio.run_coroutine_threadsafe(
+                            self.queue.get(), self.loop
+                        )
+                        # 等待数据，最多5秒
+                        logger.info("等待队列中的音频数据...")
+                        chunk = future.result(timeout=5)  # 5秒超时
+                        
+                        # None表示流结束
+                        if chunk is None:
+                            logger.info("检测到流结束标记(None)，停止迭代")
+                            raise StopIteration
+                        
+                        self.chunks_processed += 1
+                        logger.info(f"VAC处理器获取到音频块 #{self.chunks_processed}, 大小={len(chunk)}")
+                        
+                        # 返回音频块给VAC处理器
+                        # 这里是VAC处理器实际获取数据的地方
+                        return chunk
+                    
+                    except asyncio.TimeoutError:
+                        # 超时，检查结束标志
+                        if self.end_flag[0]:
+                            logger.info("由于结束标志流已结束")
+                            raise StopIteration
+                        # 返回静音块以保持流程
+                        logger.info("等待音频数据超时，返回静音块以保持VAC处理器运行")
+                        silent_chunk = np.zeros(PROCESSING_CHUNK_SIZE // 4, dtype=np.float32)  # float32是4字节
+                        self.chunks_processed += 1
+                        return silent_chunk
+                    
+                    except Exception as e:
+                        logger.error(f"迭代器中出错: {e}")
+                        raise StopIteration
+            
+            # 获取当前事件循环
+            loop = asyncio.get_running_loop()
+            
+            # 创建一个可变的结束标志引用
+            end_flag_ref = [self.end_flags[stream_id]]
+            
+            # 创建迭代器 - 这是VAC处理器的数据源
+            audio_iterator = ThreadSafeIterator(self.vac_queues[stream_id], loop, end_flag_ref)
+            
+            # 在单独的线程中运行VAC处理器
+            # 这里是VAC处理器被实际触发的地方
+            logger.info(f"启动VAC处理器处理流 {stream_id} - 这里是VAC处理器被触发的地方")
+            
+            # 确保VAC处理器已正确初始化
+            if self.vac_processor is None:
+                logger.error("VAC处理器未初始化!")
+                return
+            
+            # 记录VAC处理器的状态
+            logger.info(f"VAC处理器状态: threshold={self.vac_processor.threshold}, "
+                       f"min_silence_duration_ms={self.vac_processor.min_silence_duration_ms}")
+            
+            # 使用try-except包装VAC处理器调用，以捕获任何错误
             try:
-                message = await websocket.receive()
-                if message["type"] == "websocket.disconnect":
-                    break
-            except WebSocketDisconnect:
-                break
+                logger.info("开始调用VAC处理器的process_streaming_audio方法")
+                result = await loop.run_in_executor(
+                    None,  # 使用默认执行器
+                    lambda: self.vac_processor.process_streaming_audio(
+                        audio_stream=audio_iterator,  # 传入迭代器作为数据源
+                        end_stream_flag=False,  # 不立即结束流
+                        return_segments=True     # 返回语音段
+                    )
+                )
+                logger.info(f"VAC处理器返回结果: {result}")
+            except Exception as e:
+                logger.error(f"VAC处理器调用失败: {e}")
+                # 重新抛出异常，以便上层捕获
+                raise
+            
+            logger.info(f"音频流处理完成: {stream_id}")
+        
+        except asyncio.CancelledError:
+            logger.info(f"音频流处理被取消: {stream_id}")
+        except Exception as e:
+            logger.error(f"音频流处理出错: {e}")
+            # 打印详细的堆栈跟踪
+            import traceback
+            logger.error(f"详细错误: {traceback.format_exc()}")
     
-    except Exception as e:
-        logger.error(f"WebSocket错误: {e}")
-    finally:
-        logger.info(f"客户端 {client_id} 断开连接")
+    def _on_speech_segment(self, segment: Dict[str, Any]):
+        """语音段检测回调"""
+        logger.info(f"检测到语音段: {segment['start']:.2f}秒 - {segment['end']:.2f}秒, 持续时间: {segment['duration']:.2f}秒")
+        
+        # 为所有活跃连接发送结果
+        for stream_id, websocket in self.active_connections.items():
+            # 创建异步任务发送结果
+            asyncio.create_task(self._send_result(
+                websocket,
+                stream_id,
+                {
+                    "type": "speech_segment",
+                    "start": segment['start'],
+                    "end": segment['end'],
+                    "duration": segment['duration'],
+                    "transcript": f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
+                    "timestamp": datetime.now().isoformat(),
+                    "has_audio": True if 'audio_bytes' in segment and len(segment['audio_bytes']) > 0 else False,
+                    "audio_size": len(segment['audio_bytes']) if 'audio_bytes' in segment else 0
+                }
+            ))
+    
+    async def _send_result(self, websocket: WebSocketServerProtocol, stream_id: str, result: Dict[str, Any]):
+        """发送结果到客户端"""
+        try:
+            await websocket.send(json.dumps({
+                "type": "transcription_result",
+                "stream_id": stream_id,
+                "result": result
+            }))
+        except Exception as e:
+            logger.error(f"向客户端发送结果时出错: {e}")
 
 
-@app.websocket("/ws/save_subtitles")
-async def websocket_save_subtitles_endpoint(
-    websocket: WebSocket,
-    client_id: str = Query(...),
-    filename: str = Query(None)
-):
-    """保存字幕WebSocket端点"""
-    global subtitle_processor
+class WebSocketServer:
+    """WebSocket服务器，处理前端连接"""
     
-    await websocket.accept()
+    def __init__(self, host: str = "localhost", port: int = 8000):
+        self.host = host
+        self.port = port
+        self.audio_processor = ContinuousAudioProcessor()
+        self.active_connections = {}
+    
+    async def handle_connection(self, websocket: WebSocketServerProtocol, path: str):
+        """处理新的WebSocket连接"""
+        connection_id = str(uuid.uuid4())
+        self.active_connections[connection_id] = websocket
+        
+        try:
+            logger.info(f"新连接建立: {connection_id}")
+            await websocket.send(json.dumps({
+                "type": "connection_established",
+                "connection_id": connection_id
+            }))
+            
+            stream_id = None
+            
+            async for message in websocket:
+                if isinstance(message, str):
+                    # 处理文本消息
+                    new_stream_id = await self._handle_text_message(connection_id, message, websocket)
+                    if new_stream_id:
+                        stream_id = new_stream_id
+                else:
+                    # 处理二进制消息（音频数据）
+                    new_stream_id = await self._handle_binary_message(connection_id, message, websocket, stream_id)
+                    if new_stream_id:
+                        stream_id = new_stream_id
+        
+        except websockets.exceptions.ConnectionClosed:
+            logger.info(f"连接关闭: {connection_id}")
+        except Exception as e:
+            logger.error(f"处理连接时出错: {e}")
+        finally:
+            # 清理资源
+            if connection_id in self.active_connections:
+                del self.active_connections[connection_id]
+            if stream_id:
+                await self.audio_processor.stop_stream(stream_id)
+    
+    async def _handle_text_message(self, connection_id: str, message: str, websocket: WebSocketServerProtocol) -> Optional[str]:
+        """处理文本消息"""
+        try:
+            data = json.loads(message)
+            message_type = data.get("type")
+            
+            logger.info(f"收到来自 {connection_id} 的文本消息: {message_type}")
+            
+            if message_type == "start_stream":
+                # 开始新的音频流
+                stream_id = str(uuid.uuid4())
+                await self.audio_processor.start_stream(stream_id, websocket)
+                await websocket.send(json.dumps({
+                    "type": "stream_started",
+                    "stream_id": stream_id
+                }))
+                return stream_id
+            
+            elif message_type == "stop_stream":
+                # 停止现有的音频流
+                stream_id = data.get("stream_id")
+                if stream_id:
+                    await self.audio_processor.stop_stream(stream_id)
+                    await websocket.send(json.dumps({
+                        "type": "stream_stopped",
+                        "stream_id": stream_id
+                    }))
+            
+            elif message_type == "ping":
+                # 简单的ping-pong测试
+                await websocket.send(json.dumps({
+                    "type": "pong",
+                    "timestamp": datetime.now().isoformat()
+                }))
+            
+            else:
+                logger.warning(f"未知消息类型: {message_type}")
+                await websocket.send(json.dumps({
+                    "type": "error",
+                    "error": f"未知消息类型: {message_type}"
+                }))
+            
+            return None
+        
+        except json.JSONDecodeError:
+            logger.error(f"收到无效的JSON: {message}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "error": "无效的JSON格式"
+            }))
+        except Exception as e:
+            logger.error(f"处理文本消息时出错: {e}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "error": str(e)
+            }))
+        
+        return None
+    
+    async def _handle_binary_message(self, connection_id: str, message: bytes, websocket: WebSocketServerProtocol, stream_id: Optional[str]) -> str:
+        """处理二进制消息（音频数据）"""
+        try:
+            # 保存音频块到文件
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+            filename = f"{AUDIO_DIR}/{connection_id}_{timestamp}.wav"
+            
+            with open(filename, "wb") as f:
+                f.write(message)
+            
+            logger.info(f"收到来自 {connection_id} 的音频块: {len(message)}字节, 保存到 {filename}")
+            
+            # 如果没有流ID，自动创建一个
+            if not stream_id:
+                stream_id = str(uuid.uuid4())
+                logger.info(f"为音频数据自动创建流: {stream_id}")
+                await self.audio_processor.start_stream(stream_id, websocket)
+                
+                # 通知客户端新流已创建
+                await websocket.send(json.dumps({
+                    "type": "stream_started",
+                    "stream_id": stream_id,
+                    "auto_created": True
+                }))
+            
+            # 处理音频数据
+            result = await self.audio_processor.process_audio(stream_id, message)
+            
+            # 发送处理结果给客户端
+            await websocket.send(json.dumps({
+                "type": "audio_processing",
+                "stream_id": stream_id,
+                "result": result
+            }))
+            
+            return stream_id
+        
+        except Exception as e:
+            logger.error(f"处理二进制消息时出错: {e}")
+            await websocket.send(json.dumps({
+                "type": "error",
+                "error": str(e)
+            }))
+            return stream_id if stream_id else ""
+    
+    async def start_server(self):
+        """启动WebSocket服务器"""
+        server = await websockets.serve(
+            self.handle_connection,
+            self.host,
+            self.port
+        )
+        
+        logger.info(f"WebSocket服务器已启动，地址: ws://{self.host}:{self.port}")
+        
+        return server
+
+
+async def main():
+    """主入口点"""
+    server = WebSocketServer()
+    ws_server = await server.start_server()
     
     try:
-        # 如果没有提供文件名，使用时间戳
-        if not filename:
-            filename = f"subtitle_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        # 保存字幕
-        result = await message_handler.handle_save_subtitles(client_id, filename, "auto")
-        
-        # 发送结果
-        await websocket.send_json(result)
-    
-    except WebSocketDisconnect:
-        logger.info("保存字幕连接已断开")
-    except Exception as e:
-        logger.error(f"保存字幕WebSocket错误: {e}")
-        await websocket.send_json({
-            "type": "error",
-            "message": f"处理请求失败: {str(e)}"
-        })
+        # 保持服务器运行直到被中断
+        await asyncio.Future()
+    finally:
+        ws_server.close()
+        await ws_server.wait_closed()
 
 
 if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.info("服务器被用户停止")

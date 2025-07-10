@@ -8,6 +8,7 @@ import sys
 import time
 import numpy as np
 import torch
+import logging
 from typing import Iterator, List, Dict, Any, Optional, Callable
 from loguru import logger
 from collections import deque
@@ -15,7 +16,13 @@ from collections import deque
 # 添加whisper_streaming目录到路径
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'whisper_streaming'))
 from silero_vad_iterator import FixedVADIterator
+# 配置日志
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("subtitle_genius.stream.vac_processor")
 
 class VACProcessor:
     """
@@ -169,11 +176,11 @@ class VACProcessor:
                     
                     # 使用VAD迭代器处理块
                     result = vad(chunk, return_seconds=True)
-                    
+                    # logger.info(f"----======--->>>vad result is {result}")
                     total_samples_processed += len(chunk)
                     
                     if result:
-                        print(f"------->>>vad result is {result}")
+                        # logger.info(f"------->>>vad result is {result}")
                         results.append(result)
                         
                         # 🎯 关键逻辑：处理start和end事件

@@ -1073,7 +1073,7 @@ def analyze_with_fixed_vad_streaming(audio_stream, sample_rate=16000,
     )
     
     # 处理流式音频，返回原始结果（不转换为segments）
-    results = vac_processor.process_streaming_audio(audio_stream, return_segments=False)
+    results = vac_processor.process_streaming_audio(audio_stream, return_segments=False, end_stream_flag = True)
     
     return results
 
@@ -1291,7 +1291,7 @@ def test_speech_segment_events(audio_file="chinese_180s.wav", chunk_duration=0.1
     start_time = time.time()
     
     # 处理流式音频（这会触发事件回调）
-    vad_results = vac_processor.process_streaming_audio(audio_stream, return_segments=False)
+    vad_results = vac_processor.process_streaming_audio(audio_stream, return_segments=False, end_stream_flag=True)
     
     processing_time = time.time() - start_time
     print(f"⏱️  处理完成，耗时: {processing_time:.2f}s")
@@ -1360,7 +1360,7 @@ if __name__ == "__main__":
     # 运行原有的主测试
     main()
     
-    # 运行新的事件订阅测试
-    print("\n" + "="*100)
-    test_speech_segment_events()
+    # # 运行新的事件订阅测试
+    # print("\n" + "="*100)
+    # test_speech_segment_events()
 
