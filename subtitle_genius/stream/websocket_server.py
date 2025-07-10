@@ -413,7 +413,15 @@ class ContinuousAudioProcessor:
                 "result": result,
                 "timestamp": datetime.now().isoformat()
             }
-    # 添加在ContinuousAudioProcessor类中，_send_result方法之后
+            
+            # 发送JSON响应
+            await websocket.send(json.dumps(response_data))
+            
+            logger.debug(f"已向客户端 {stream_id} 发送结果: {result['type']}")
+        except Exception as e:
+            logger.error(f"向客户端发送结果时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     # 存储最近的语音段音频数据，用于按需获取
     # 格式: {segment_id: {'audio_bytes': bytes, 'metadata': dict}}
@@ -476,15 +484,7 @@ class ContinuousAudioProcessor:
             "metadata": audio_data['metadata']
         }))
         
-        logger.info(f"已发送音频段 {segment_id} 的数据，大小: {len(audio_data['audio_bytes'])} 字节")            
-            # 发送JSON响应
-            await websocket.send(json.dumps(response_data))
-            
-            logger.debug(f"已向客户端 {stream_id} 发送结果: {result['type']}")
-        except Exception as e:
-            logger.error(f"向客户端发送结果时出错: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
+        logger.info(f"已发送音频段 {segment_id} 的数据，大小: {len(audio_data['audio_bytes'])} 字节")
 
 
 class WebSocketServer:
@@ -572,7 +572,15 @@ class WebSocketServer:
                 # 处理音频数据请求
                 segment_id = data.get("segment_id")
                 if segment_id:
-                    await self.audio_processor.handle_audio_request(websocket, segment_id)
+                    # 直接调用音频处理器的handle_audio_request方法
+                    if hasattr(self.audio_processor, 'handle_audio_request'):
+                        await self.audio_processor.handle_audio_request(websocket, segment_id)
+                    else:
+                        logger.error("音频处理器没有handle_audio_request方法")
+                        await websocket.send(json.dumps({
+                            "type": "error",
+                            "error": "服务器不支持音频数据请求功能"
+                        }))
                 else:
                     await websocket.send(json.dumps({
                         "type": "error",
