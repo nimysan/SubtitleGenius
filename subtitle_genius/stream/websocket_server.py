@@ -6,7 +6,7 @@ import io
 import uuid
 import numpy as np
 import soundfile as sf
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Iterator
 
 import websockets
@@ -14,6 +14,8 @@ from websockets.server import WebSocketServerProtocol
 
 # 导入VAC处理器
 from subtitle_genius.stream.vac_processor import VACProcessor
+# 导入SageMaker Whisper流式处理模型
+from subtitle_genius.models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel
 
 # 配置日志
 logging.basicConfig(
@@ -51,7 +53,7 @@ class ContinuousAudioProcessor:
             sample_rate=16000,
             processing_chunk_size=512,  # VAC处理器的处理块大小
             no_audio_input_threshold=5.0,
-            on_speech_segment=self._on_speech_segment
+            on_speech_segment=self._on_speech_segment_sync
         )
         # 存储活跃的连接
         self.active_connections = {}
@@ -64,7 +66,52 @@ class ContinuousAudioProcessor:
         # 音频队列 - 用于VAC处理器
         self.vac_queues = {}
         
+        # WebVTT文件路径
+        self.webvtt_file = "test.webvtt"
+        # 初始化WebVTT文件
+        self._init_webvtt_file()
+        
+        # 初始化SageMaker Whisper模型
+        try:
+            # 从环境变量或配置中获取端点名称和区域
+            endpoint_name = os.environ.get("SAGEMAKER_WHISPER_ENDPOINT", "endpoint-quick-start-z9afg")
+            region_name = os.environ.get("AWS_REGION", "us-east-1")
+            
+            self.whisper_model = WhisperSageMakerStreamingModel(
+                endpoint_name=endpoint_name,
+                region_name=region_name
+            )
+            logger.info(f"SageMaker Whisper模型初始化成功: {endpoint_name}")
+        except Exception as e:
+            logger.error(f"初始化SageMaker Whisper模型失败: {e}")
+            self.whisper_model = None
+        
         logger.info("ContinuousAudioProcessor初始化完成")
+    
+    def _init_webvtt_file(self):
+        """初始化WebVTT文件"""
+        with open(self.webvtt_file, "w", encoding="utf-8") as f:
+            f.write("WEBVTT\n\n")
+        logger.info(f"已初始化WebVTT文件: {self.webvtt_file}")
+    
+    def _format_timestamp(self, seconds: float) -> str:
+        """将秒数格式化为WebVTT时间戳格式 (HH:MM:SS.mmm)"""
+        td = timedelta(seconds=seconds)
+        hours, remainder = divmod(td.seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        milliseconds = int(td.microseconds / 1000)
+        return f"{hours:02d}:{minutes:02d}:{seconds:02d}.{milliseconds:03d}"
+    
+    def _write_subtitle_to_webvtt(self, start: float, end: float, text: str):
+        """将字幕写入WebVTT文件"""
+        start_timestamp = self._format_timestamp(start)
+        end_timestamp = self._format_timestamp(end)
+        
+        with open(self.webvtt_file, "a", encoding="utf-8") as f:
+            f.write(f"{start_timestamp} --> {end_timestamp}\n")
+            f.write(f"{text}\n\n")
+        
+        logger.info(f"已将字幕写入WebVTT文件: {start_timestamp} --> {end_timestamp}: {text}")
     
     async def start_stream(self, stream_id: str, websocket: WebSocketServerProtocol):
         """开始一个新的音频流处理"""
@@ -132,6 +179,9 @@ class ContinuousAudioProcessor:
                 del self.end_flags[stream_id]
             if stream_id in self.active_connections:
                 del self.active_connections[stream_id]
+            
+            # 记录WebVTT文件已完成
+            logger.info(f"WebVTT文件已完成: {self.webvtt_file}")
     
     def bytes_to_audio_data(self, binary_data):
         """
@@ -326,7 +376,7 @@ class ContinuousAudioProcessor:
             import traceback
             logger.error(f"详细错误: {traceback.format_exc()}")
     
-    def _on_speech_segment(self, segment: Dict[str, Any]):
+    async def _on_speech_segment(self, segment: Dict[str, Any]):
         """语音段检测回调"""
         logger.info(f"_on_speech_segment 检测到语音段: {segment['start']:.2f}秒 - {segment['end']:.2f}秒, 持续时间: {segment['duration']:.2f}秒")
         
@@ -345,12 +395,39 @@ class ContinuousAudioProcessor:
                 logger.warning(f"音频数据不完整，可能影响后续处理")
         else:
             logger.warning(f"语音段没有音频数据")
+            return
         
         # 存储音频数据并获取段ID
-        segment_id = None
-        if has_audio:
-            segment_id = self._store_audio_segment(segment)
-            logger.info(f"已存储音频段，ID: {segment_id}")
+        segment_id = self._store_audio_segment(segment)
+        logger.info(f"已存储音频段，ID: {segment_id}")
+        
+        # 使用SageMaker Whisper模型进行转录
+        transcript = ""
+        if has_audio and self.whisper_model is not None:
+            try:
+                # 将音频数据转换为numpy数组
+                audio_data = np.frombuffer(segment['audio_bytes'], dtype=np.float32)
+                
+                # 获取语言设置（可以从配置或请求中获取）
+                language = os.environ.get("SUBTITLE_LANGUAGE", "zh")
+                
+                # 异步调用Whisper模型进行转录
+                logger.info(f"调用SageMaker Whisper模型转录音频，语言: {language}")
+                transcript = await self.whisper_model.transcribe_audio(audio_data, language)
+                
+                logger.info(f"转录结果: {transcript}")
+                
+                # 将字幕写入WebVTT文件
+                if transcript:
+                    self._write_subtitle_to_webvtt(
+                        start=segment['start'],
+                        end=segment['end'],
+                        text=transcript
+                    )
+            except Exception as e:
+                logger.error(f"转录音频时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
         
         # 为所有活跃连接发送结果
         for stream_id, websocket in self.active_connections.items():
@@ -374,7 +451,7 @@ class ContinuousAudioProcessor:
                 "start": segment['start'],
                 "end": segment['end'],
                 "duration": segment['duration'],
-                "transcript": f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
+                "transcript": transcript if transcript else f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
                 "timestamp": datetime.now().isoformat(),
                 "has_audio": has_audio,
                 "audio_size": audio_size,
@@ -398,6 +475,37 @@ class ContinuousAudioProcessor:
                 logger.debug(f"已安排发送语音段结果到客户端 {stream_id}")
             except Exception as e:
                 logger.error(f"安排发送语音段结果时出错: {e}")
+    
+    def _on_speech_segment_sync(self, segment: Dict[str, Any]):
+        """
+        语音段检测同步回调 - 这是VAC处理器实际调用的方法
+        它会创建一个异步任务来处理语音段
+        """
+        # 获取事件循环 - 优先使用存储的主循环
+        loop = self.main_loop
+        
+        # 如果主循环未设置，尝试获取当前运行的循环
+        if loop is None:
+            try:
+                loop = asyncio.get_running_loop()
+                # 更新主循环引用以便后续使用
+                self.main_loop = loop
+                logger.info("已更新主事件循环引用")
+            except RuntimeError:
+                logger.error("无法获取事件循环，无法处理语音段")
+                return
+        
+        # 使用线程安全的方式调度异步处理方法
+        try:
+            asyncio.run_coroutine_threadsafe(
+                self._on_speech_segment(segment),
+                loop
+            )
+            logger.debug(f"已安排异步处理语音段")
+        except Exception as e:
+            logger.error(f"安排异步处理语音段时出错: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
     
     async def _send_result(self, websocket: WebSocketServerProtocol, stream_id: str, result: Dict[str, Any]):
         """发送结果到客户端"""
@@ -678,9 +786,17 @@ async def main():
     try:
         # 保持服务器运行直到被中断
         await asyncio.Future()
+    except asyncio.CancelledError:
+        logger.info("服务器被取消")
     finally:
+        # 关闭所有活跃的流
+        for stream_id in list(server.audio_processor.active_connections.keys()):
+            await server.audio_processor.stop_stream(stream_id)
+        
+        # 关闭WebSocket服务器
         ws_server.close()
         await ws_server.wait_closed()
+        logger.info("WebSocket服务器已关闭")
 
 
 if __name__ == "__main__":
@@ -688,3 +804,4 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("服务器被用户停止")
+
