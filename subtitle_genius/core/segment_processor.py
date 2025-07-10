@@ -91,7 +91,7 @@ class AudioSegmentProcessor:
         """
         try:
             # 计算结束时间
-            duration = len(audio_segment) / self.subtitle_generator.audio_processor.sample_rate
+            duration = len(audio_segment) / 16000
             end_time = timestamp + duration
             
             # 使用模型转录音频段

@@ -6,7 +6,6 @@ from pathlib import Path
 from loguru import logger
 
 from ..models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel
-from ..audio.processor import AudioProcessor
 from ..subtitle.formatter import SubtitleFormatter
 from ..subtitle.models import Subtitle
 from .config import config
@@ -25,8 +24,6 @@ class SubtitleGenerator:
         self.language = language
         self.output_format = output_format
         
-        # 初始化组件
-        self.audio_processor = AudioProcessor()
         self.subtitle_formatter = SubtitleFormatter()
         
         # 初始化AI模型
@@ -43,7 +40,7 @@ class SubtitleGenerator:
             )
         else:
             raise ValueError(f"Unsupported model: {self.model_name}")
-        
+    
     async def generate_realtime(
         self, 
         audio_stream
@@ -60,7 +57,7 @@ class SubtitleGenerator:
             if len(buffer) >= config.real_time_buffer_size:
                 try:
                     # 合并音频块
-                    combined_audio = self.audio_processor.combine_chunks(buffer)
+                    combined_audio = buffer
                     
                     # 生成字幕
                     if hasattr(self.model, 'transcribe'):
