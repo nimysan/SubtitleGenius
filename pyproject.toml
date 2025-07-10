@@ -65,6 +65,7 @@ dependencies = [
     "silero-vad>=5.1.2",
     "faster-whisper>=1.1.1",
     "pypubsub>=4.0.3",
+    "seaborn>=0.13.2",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",

@@ -39,13 +39,22 @@ def clean_directory(directory):
         os.makedirs(directory)
         logger.info(f"创建目录: {directory}")
 
-def transcode_to_dash(input_file, output_dir, segment_duration=4, window_size=5, extra_window_size=10):
-    """使用ffmpeg将视频转码为DASH格式"""
+def transcode_to_dash(input_file, output_dir, subtitle_file=None, segment_duration=4, window_size=5, extra_window_size=10):
+    """使用ffmpeg将视频转码为DASH格式，可选添加字幕"""
     if not os.path.exists(input_file):
         logger.error(f"输入文件不存在: {input_file}")
         return False
     
-    # 构建ffmpeg命令
+    # 如果提供了字幕文件，复制到输出目录
+    if subtitle_file and os.path.exists(subtitle_file):
+        subtitle_dest = os.path.join(output_dir, "subtitle.vtt")
+        try:
+            shutil.copy2(subtitle_file, subtitle_dest)
+            logger.info(f"已复制字幕文件到: {subtitle_dest}")
+        except Exception as e:
+            logger.error(f"复制字幕文件失败: {e}")
+    
+    # 构建ffmpeg命令 - 只处理视频和音频，不处理字幕
     cmd = [
         "ffmpeg", "-re", "-i", input_file,
         "-c:v", "libx264", "-c:a", "aac",
@@ -123,14 +132,14 @@ def signal_handler(sig, frame):
         http_server.shutdown()
     sys.exit(0)
 
-def create_html_player(directory):
-    """创建简单的HTML播放器"""
+def create_html_player(directory, has_subtitle=False):
+    """创建简单的HTML播放器，支持字幕显示"""
     html_content = """<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>DASH播放器</title>
+    <title>DASH播放器 (带字幕)</title>
     <script src="https://cdn.dashjs.org/latest/dash.all.min.js"></script>
     <style>
         body {
@@ -157,18 +166,53 @@ def create_html_player(directory):
             margin: 0 auto;
             display: block;
         }
+        .controls {
+            margin: 20px auto;
+            max-width: 1080px;
+            text-align: center;
+        }
+        .controls button {
+            padding: 8px 15px;
+            margin: 0 5px;
+            background-color: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+        }
+        .controls button:hover {
+            background-color: #2980b9;
+        }
+        .subtitle-info {
+            margin: 10px auto;
+            max-width: 1080px;
+            padding: 10px;
+            background-color: #f8f9fa;
+            border-radius: 4px;
+            text-align: center;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>DASH流媒体播放器</h1>
+        <h1>DASH流媒体播放器 (带字幕)</h1>
         <video id="videoPlayer" controls></video>
+        
+        <div class="subtitle-info">
+            <p>字幕状态: <span id="subtitleStatus">""" + ("可用" if has_subtitle else "未提供") + """</span></p>
+        </div>
+        
+        <div class="controls">
+            <button id="toggleSubtitle">""" + ("关闭字幕" if has_subtitle else "开启字幕") + """</button>
+            <button id="reloadPlayer">重新加载</button>
+        </div>
     </div>
     
     <script>
         // 初始化播放器
+        var video = document.querySelector("#videoPlayer");
         var player = dashjs.MediaPlayer().create();
-        player.initialize(document.querySelector("#videoPlayer"), "index.mpd", true);
+        player.initialize(video, "index.mpd", true);
         
         // 设置缓冲参数
         player.updateSettings({
@@ -178,6 +222,44 @@ def create_html_player(directory):
                     'bufferTimeAtTopQuality': 30
                 }
             }
+        });
+        
+        // 字幕控制
+        var subtitleEnabled = """ + ("true" if has_subtitle else "false") + """;
+        var subtitleStatus = document.getElementById('subtitleStatus');
+        var toggleSubtitleBtn = document.getElementById('toggleSubtitle');
+        var reloadPlayerBtn = document.getElementById('reloadPlayer');
+        
+        // 如果有字幕文件，手动添加字幕轨道
+        """ + ("""
+        // 添加字幕轨道
+        var track = document.createElement("track");
+        track.kind = "subtitles";
+        track.label = "中文";
+        track.srclang = "zh";
+        track.src = "subtitle.vtt";
+        track.default = true;
+        video.appendChild(track);
+        
+        // 确保字幕显示
+        video.textTracks[0].mode = 'showing';
+        """ if has_subtitle else "") + """
+        
+        // 开关字幕
+        toggleSubtitleBtn.addEventListener('click', function() {
+            if (!""" + str(has_subtitle).lower() + """) {
+                alert('没有可用的字幕！');
+                return;
+            }
+            
+            subtitleEnabled = !subtitleEnabled;
+            video.textTracks[0].mode = subtitleEnabled ? 'showing' : 'hidden';
+            toggleSubtitleBtn.textContent = subtitleEnabled ? '关闭字幕' : '开启字幕';
+        });
+        
+        // 重新加载播放器
+        reloadPlayerBtn.addEventListener('click', function() {
+            location.reload();
         });
     </script>
 </body>
@@ -192,6 +274,7 @@ def create_html_player(directory):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="DASH流媒体转换和服务脚本")
     parser.add_argument("--input", required=True, help="输入视频文件路径")
+    parser.add_argument("--subtitle", help="输入字幕文件路径 (VTT格式)")
     parser.add_argument("--output", default="dash", help="输出目录")
     parser.add_argument("--port", type=int, default=8080, help="HTTP服务器端口")
     parser.add_argument("--segment", type=int, default=4, help="分段时长(秒)")
@@ -207,13 +290,17 @@ if __name__ == "__main__":
     # 清理输出目录
     clean_directory(args.output)
     
+    # 检查是否有字幕文件
+    has_subtitle = args.subtitle and os.path.exists(args.subtitle)
+    
     # 创建HTML播放器
-    create_html_player(args.output)
+    create_html_player(args.output, has_subtitle)
     
     # 启动转码进程
     transcode_process = transcode_to_dash(
         args.input, 
         args.output, 
+        args.subtitle,
         args.segment, 
         args.window, 
         args.buffer

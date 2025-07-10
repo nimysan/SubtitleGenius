@@ -847,7 +847,7 @@ class WebSocketServer:
             elif message_type == "audio_with_timestamp":
                 # 处理带时间戳的音频消息（前端发送的元数据）
                 timestamp_info = data.get("timestamp", {})
-                logger.info(f"收到音频时间戳信息: {timestamp_info}")
+                logger.debug(f"收到音频时间戳信息: {timestamp_info}")
                 # 这里可以存储时间戳信息，等待后续的二进制音频数据
                 # 暂时只记录日志
             
