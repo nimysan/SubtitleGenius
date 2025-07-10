@@ -595,34 +595,7 @@ class WebSocketServer:
                 }))
             
             return None
-                }))
-                return stream_id
-            
-            elif message_type == "stop_stream":
-                # 停止现有的音频流
-                stream_id = data.get("stream_id")
-                if stream_id:
-                    await self.audio_processor.stop_stream(stream_id)
-                    await websocket.send(json.dumps({
-                        "type": "stream_stopped",
-                        "stream_id": stream_id
-                    }))
-            
-            elif message_type == "ping":
-                # 简单的ping-pong测试
-                await websocket.send(json.dumps({
-                    "type": "pong",
-                    "timestamp": datetime.now().isoformat()
-                }))
-            
-            else:
-                logger.warning(f"未知消息类型: {message_type}")
-                await websocket.send(json.dumps({
-                    "type": "error",
-                    "error": f"未知消息类型: {message_type}"
-                }))
-            
-            return None
+              
         
         except json.JSONDecodeError:
             logger.error(f"收到无效的JSON: {message}")
