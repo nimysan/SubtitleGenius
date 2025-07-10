@@ -1,11 +1,20 @@
 """字幕处理流水线模块"""
 
+import os
+import logging
 from typing import List
 
 from ..subtitle.models import Subtitle
 from ..correction.base import CorrectionInput, CorrectionOutput
 from ..correction.factory import create_corrector
 from ..translation.utils import translate_text
+
+# 配置日志记录器
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger("subtitle_genius.pipeline.subtitle_pipeline")
 
 
 class SubtitlePipeline:
@@ -60,21 +69,18 @@ class SubtitlePipeline:
         
         # 历史字幕，用于校正
         self.history_subtitles: List[str] = []
-    
-    def add_subtitle(self, subtitle: Subtitle) -> None:
-        """
-        添加字幕条目
         
-        Args:
-            subtitle: 字幕条目
-        """
-        self.subtitles.append(subtitle)
-    
+        # 记录初始化信息
+        logger.info(f"SubtitlePipeline初始化完成: source_language={source_language}, "
+                   f"target_language={target_language}, correction_enabled={correction_enabled}, "
+                   f"translation_enabled={translation_enabled}, scene_description='{scene_description}'")
     
     def clear_subtitles(self) -> None:
         """清空字幕条目列表"""
+        count = len(self.subtitles)
         self.subtitles = []
         self.history_subtitles = []
+        logger.info(f"清空字幕列表，共清除{count}条字幕")
     
     async def correct_subtitle(self, subtitle: Subtitle) -> Subtitle:
         """
@@ -86,8 +92,13 @@ class SubtitlePipeline:
         Returns:
             Subtitle: 校正后的字幕
         """
+        # 记录原始字幕
+        original_text = subtitle.text
+        logger.info(f"校正前字幕: start={subtitle.start:.2f}, end={subtitle.end:.2f}, text='{original_text}'")
+        
         # 如果未启用校正或字幕为空，直接返回
         if not self.correction_enabled or not subtitle.text.strip() or not self.correction_service:
+            logger.info(f"跳过校正: correction_enabled={self.correction_enabled}, text_empty={not subtitle.text.strip()}, service_available={self.correction_service is not None}")
             return subtitle
         
         # 准备校正输入
@@ -108,8 +119,15 @@ class SubtitlePipeline:
             # 添加到历史
             self.history_subtitles.append(subtitle.text)
             
+            # 记录校正后的字幕
+            logger.info(f"校正后字幕: start={subtitle.start:.2f}, end={subtitle.end:.2f}, text='{subtitle.text}'")
+            if original_text != subtitle.text:
+                logger.info(f"字幕已校正: 原文='{original_text}' -> 校正后='{subtitle.text}'")
+            
         except Exception as e:
-            print(f"Error in subtitle correction: {e}")
+            error_msg = f"字幕校正出错: {e}"
+            logger.error(error_msg)
+            print(error_msg)
         
         return subtitle
     
@@ -123,8 +141,12 @@ class SubtitlePipeline:
         Returns:
             Subtitle: 翻译后的字幕
         """
+        # 记录翻译前的字幕
+        logger.info(f"翻译前字幕: start={subtitle.start:.2f}, end={subtitle.end:.2f}, text='{subtitle.text}'")
+        
         # 如果未启用翻译或字幕为空，直接返回
         if not self.translation_enabled or not subtitle.text.strip():
+            logger.info(f"跳过翻译: translation_enabled={self.translation_enabled}, text_empty={not subtitle.text.strip()}")
             return subtitle
         
         try:
@@ -140,8 +162,14 @@ class SubtitlePipeline:
             # 更新字幕的翻译文本
             subtitle.translated_text = translated_text
             
+            # 记录翻译后的字幕
+            logger.info(f"翻译后字幕: start={subtitle.start:.2f}, end={subtitle.end:.2f}, "
+                       f"原文='{subtitle.text}', 译文='{translated_text}'")
+            
         except Exception as e:
-            print(f"Error in subtitle translation: {e}")
+            error_msg = f"字幕翻译出错: {e}"
+            logger.error(error_msg)
+            print(error_msg)
         
         return subtitle
     
@@ -155,6 +183,10 @@ class SubtitlePipeline:
         Returns:
             Subtitle: 处理后的字幕
         """
+        # 记录处理前的字幕
+        original_text = subtitle.text
+        logger.info(f"开始处理字幕: start={subtitle.start:.2f}, end={subtitle.end:.2f}, text='{original_text}'")
+        
         # 校正
         if self.correction_enabled and self.correction_service:
             subtitle = await self.correct_subtitle(subtitle)
@@ -162,5 +194,13 @@ class SubtitlePipeline:
         # 翻译
         if self.translation_enabled:
             subtitle = await self.translate_subtitle(subtitle)
+        
+        # 记录处理后的字幕
+        logger.info(f"字幕处理完成: start={subtitle.start:.2f}, end={subtitle.end:.2f}, "
+                   f"text='{subtitle.text}', translated_text='{subtitle.translated_text or ''}'")
+        
+        # 记录字幕变化
+        if original_text != subtitle.text:
+            logger.info(f"字幕内容已变更: 原文='{original_text}' -> 处理后='{subtitle.text}'")
         
         return subtitle

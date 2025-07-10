@@ -239,9 +239,9 @@ class ContinuousAudioProcessor:
             
             audio_data, sample_rate = self.bytes_to_audio_data(binary_data)
             
-            print(f"音频数据: 形状={audio_data.shape}, 类型={audio_data.dtype}")
-            print(f"采样率: {sample_rate} Hz")
-            print(f"音频时长: {len(audio_data)}长度")
+            logger.debug(f"音频数据: 形状={audio_data.shape}, 类型={audio_data.dtype}")
+            logger.debug(f"采样率: {sample_rate} Hz")
+            logger.debug(f"音频时长: {len(audio_data)}长度")
             # 步骤1: 将音频数据添加到缓冲区
             self.audio_buffers[stream_id].extend(audio_data)
             buffer_size = len(self.audio_buffers[stream_id])
@@ -452,6 +452,10 @@ class ContinuousAudioProcessor:
                 logger.info(f"处理后的字幕: {transcript}")
                 if translated_text:
                     logger.info(f"翻译后的字幕: {translated_text}")
+                
+                # 将字幕写入WebVTT文件
+                self._write_subtitle_to_webvtt(segment['start'], segment['end'], transcript)
+                logger.info(f"已将字幕写入WebVTT文件: {segment['start']:.2f}s - {segment['end']:.2f}s: {transcript}")
             else:
                 logger.warning("WhisperSageMakerStreamingModel未初始化，无法转录")
                 transcript = f"[未转录的语音段: {segment['start']:.2f}s - {segment['end']:.2f}s]"

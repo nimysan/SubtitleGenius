@@ -37,6 +37,8 @@ vac_file_handler = RotatingFileHandler(
     encoding='utf-8'
 )
 
+
+
 # 设置日志格式
 formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 main_file_handler.setFormatter(formatter)
