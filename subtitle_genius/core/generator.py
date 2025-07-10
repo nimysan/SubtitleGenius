@@ -5,10 +5,7 @@ from typing import AsyncGenerator, List, Optional, Union
 from pathlib import Path
 from loguru import logger
 
-from ..models.whisper_model import WhisperModel
-from ..models.openai_model import OpenAIModel
-from ..models.claude_model import ClaudeModel
-from ..models.transcribe_model import TranscribeModel
+from ..models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel
 from ..audio.processor import AudioProcessor
 from ..subtitle.formatter import SubtitleFormatter
 from ..subtitle.models import Subtitle
@@ -20,7 +17,7 @@ class SubtitleGenerator:
     
     def __init__(
         self,
-        model: str = "openai-whisper",
+        model: str = "whisper-sagemaker-streaming",
         language: str = "zh-CN",
         output_format: str = "srt"
     ):
@@ -39,35 +36,14 @@ class SubtitleGenerator:
     
     def _init_model(self) -> None:
         """初始化AI模型"""
-        if self.model_name == "openai-whisper":
-            self.model = WhisperModel()
-        elif self.model_name == "openai-gpt":
-            self.model = OpenAIModel()
-        elif self.model_name == "claude":
-            self.model = ClaudeModel()
-        elif self.model_name == "amazon-transcribe":
-            self.model = TranscribeModel(region_name=config.aws_region)
+        if self.model_name == "whisper-sagemaker-streaming":
+             self.model = WhisperSageMakerStreamingModel(
+                endpoint_name=config.sagemaker_endpoint_name,
+                region_name=config.aws_region
+            )
         else:
             raise ValueError(f"Unsupported model: {self.model_name}")
-    
-    async def generate_from_file(self, file_path: Union[str, Path]) -> List[Subtitle]:
-        """从音频文件生成字幕"""
-        file_path = Path(file_path)
         
-        if not file_path.exists():
-            raise FileNotFoundError(f"Audio file not found: {file_path}")
-        
-        logger.info(f"Processing audio file: {file_path}")
-        
-        # 处理音频文件
-        audio_data = await self.audio_processor.process_file(file_path)
-        
-        # 生成字幕
-        subtitles = await self.model.transcribe(audio_data, self.language)
-        
-        logger.info(f"Generated {len(subtitles)} subtitles")
-        return subtitles
-    
     async def generate_realtime(
         self, 
         audio_stream
@@ -87,10 +63,20 @@ class SubtitleGenerator:
                     combined_audio = self.audio_processor.combine_chunks(buffer)
                     
                     # 生成字幕
-                    subtitles = await self.model.transcribe(
-                        combined_audio, 
-                        self.language
-                    )
+                    if hasattr(self.model, 'transcribe'):
+                        subtitles = await self.model.transcribe(
+                            combined_audio, 
+                            self.language
+                        )
+                    elif hasattr(self.model, 'transcribe_audio'):
+                        # 使用transcribe_audio方法
+                        text = await self.model.transcribe_audio(combined_audio, self.language)
+                        # 创建单个字幕
+                        duration = len(combined_audio) / self.audio_processor.sample_rate
+                        subtitles = [Subtitle(start=0, end=duration, text=text)] if text else []
+                    else:
+                        logger.error(f"Model {self.model_name} does not implement transcribe or transcribe_audio method")
+                        subtitles = []
                     
                     # 返回生成的字幕
                     for subtitle in subtitles:
@@ -102,43 +88,3 @@ class SubtitleGenerator:
                 except Exception as e:
                     logger.error(f"Error in real-time processing: {e}")
                     continue
-    
-    def save_subtitles(
-        self, 
-        subtitles: List[Subtitle], 
-        output_path: Union[str, Path]
-    ) -> None:
-        """保存字幕到文件"""
-        output_path = Path(output_path)
-        
-        formatted_content = self.subtitle_formatter.format(
-            subtitles, 
-            self.output_format
-        )
-        
-        with open(output_path, 'w', encoding='utf-8') as f:
-            f.write(formatted_content)
-        
-        logger.info(f"Subtitles saved to: {output_path}")
-    
-    async def process_video(
-        self, 
-        video_path: Union[str, Path], 
-        output_path: Optional[Union[str, Path]] = None
-    ) -> List[Subtitle]:
-        """处理视频文件并生成字幕"""
-        video_path = Path(video_path)
-        
-        if output_path is None:
-            output_path = video_path.with_suffix(f'.{self.output_format}')
-        
-        # 从视频中提取音频
-        audio_data = await self.audio_processor.extract_from_video(video_path)
-        
-        # 生成字幕
-        subtitles = await self.model.transcribe(audio_data, self.language)
-        
-        # 保存字幕
-        self.save_subtitles(subtitles, output_path)
-        
-        return subtitles

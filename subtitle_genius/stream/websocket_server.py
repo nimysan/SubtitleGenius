@@ -16,6 +16,9 @@ from websockets.server import WebSocketServerProtocol
 from subtitle_genius.stream.vac_processor import VACProcessor
 # 导入SageMaker Whisper流式处理模型
 from subtitle_genius.models.whisper_sagemaker_streaming import WhisperSageMakerStreamingModel
+# 导入音频段处理器
+from subtitle_genius.core.segment_processor import AudioSegmentProcessor
+from subtitle_genius.core.segment_processor_config import AudioSegmentProcessorConfig
 
 # 配置日志
 logging.basicConfig(
@@ -85,6 +88,24 @@ class ContinuousAudioProcessor:
         except Exception as e:
             logger.error(f"初始化SageMaker Whisper模型失败: {e}")
             self.whisper_model = None
+            
+        # 初始化AudioSegmentProcessor
+        try:
+            # 创建配置 - 使用默认配置，不传递参数
+            segment_processor_config = AudioSegmentProcessorConfig()
+            
+            # 手动设置一些关键配置（如果需要覆盖默认值）
+            segment_processor_config.transcribe_model = "whisper-sagemaker-streaming"
+            segment_processor_config.source_language = os.environ.get("SUBTITLE_LANGUAGE", "zh")
+            segment_processor_config.correction_enabled = True
+            segment_processor_config.translation_enabled = os.environ.get("TRANSLATION_ENABLED", "false").lower() == "true"
+            
+            # 创建处理器
+            self.segment_processor = AudioSegmentProcessor(config=segment_processor_config)
+            logger.info(f"AudioSegmentProcessor初始化成功")
+        except Exception as e:
+            logger.error(f"初始化AudioSegmentProcessor失败: {e}")
+            self.segment_processor = None
         
         logger.info("ContinuousAudioProcessor初始化完成")
     
@@ -401,21 +422,28 @@ class ContinuousAudioProcessor:
         segment_id = self._store_audio_segment(segment)
         logger.info(f"已存储音频段，ID: {segment_id}")
         
-        # 使用SageMaker Whisper模型进行转录
+        # 使用AudioSegmentProcessor处理音频段
         transcript = ""
-        if has_audio and self.whisper_model is not None:
+        translated_text = None
+        
+        # 使用AudioSegmentProcessor
+        if has_audio and self.segment_processor is not None:
             try:
                 # 将音频数据转换为numpy数组
                 audio_data = np.frombuffer(segment['audio_bytes'], dtype=np.float32)
                 
-                # 获取语言设置（可以从配置或请求中获取）
-                language = os.environ.get("SUBTITLE_LANGUAGE", "zh")
+                # 使用AudioSegmentProcessor处理音频段
+                logger.info(f"使用AudioSegmentProcessor处理音频段，开始时间: {segment['start']}")
+                subtitle = await self.segment_processor.process_segment(
+                    audio_segment=audio_data,
+                    timestamp=segment['start']
+                )
                 
-                # 异步调用Whisper模型进行转录
-                logger.info(f"调用SageMaker Whisper模型转录音频，语言: {language}")
-                transcript = await self.whisper_model.transcribe_audio(audio_data, language)
+                # 获取处理结果
+                transcript = subtitle.text
+                translated_text = subtitle.translated_text
                 
-                logger.info(f"转录结果: {transcript}")
+                logger.info(f"处理结果: 转录={transcript}, 翻译={translated_text}")
                 
                 # 将字幕写入WebVTT文件
                 if transcript:
@@ -425,9 +453,11 @@ class ContinuousAudioProcessor:
                         text=transcript
                     )
             except Exception as e:
-                logger.error(f"转录音频时出错: {e}")
+                logger.error(f"使用AudioSegmentProcessor处理音频段时出错: {e}")
                 import traceback
                 logger.error(traceback.format_exc())
+        else:
+            logger.warning(f"无法处理音频段: AudioSegmentProcessor未初始化")
         
         # 为所有活跃连接发送结果
         for stream_id, websocket in self.active_connections.items():
@@ -452,6 +482,7 @@ class ContinuousAudioProcessor:
                 "end": segment['end'],
                 "duration": segment['duration'],
                 "transcript": transcript if transcript else f"检测到语音，从 {segment['start']:.2f}秒 到 {segment['end']:.2f}秒",
+                "translated_text": translated_text,  # 添加翻译结果
                 "timestamp": datetime.now().isoformat(),
                 "has_audio": has_audio,
                 "audio_size": audio_size,
@@ -459,7 +490,8 @@ class ContinuousAudioProcessor:
                 "sample_rate": segment.get('sample_rate', 16000),
                 "num_channels": segment.get('num_channels', 1),
                 "completeness": completeness,
-                "is_final": segment.get('is_final', False)
+                "is_final": segment.get('is_final', False),
+                "has_translation": translated_text is not None  # 添加是否有翻译的标志
             }
             
             # 如果有音频段ID，添加到结果中
@@ -804,4 +836,3 @@ if __name__ == "__main__":
         asyncio.run(main())
     except KeyboardInterrupt:
         logger.info("服务器被用户停止")
-

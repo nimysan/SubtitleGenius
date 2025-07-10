@@ -17,6 +17,8 @@ from collections import deque
 # 导入现有的 SageMaker Whisper 客户端
 import sys
 from pathlib import Path
+
+from subtitle_genius.models.base import BaseModel
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from sagemaker_whisper import WhisperSageMakerClient, chunk_audio
 
@@ -123,7 +125,7 @@ class WhisperSageMakerStreamBuffer:
         return energy > self.config.voice_threshold
 
 
-class WhisperSageMakerStreamingModel:
+class WhisperSageMakerStreamingModel(BaseModel):
     """基于 SageMaker 的 Whisper 流式处理模型"""
     
     def __init__(self, 
@@ -143,8 +145,11 @@ class WhisperSageMakerStreamingModel:
         
         # 线程池用于异步处理
         self.executor = ThreadPoolExecutor(max_workers=2)
-        
-    async def transcribe_audio(self, audio_data: np.ndarray, language: str = "zh") -> str:
+    
+    def is_available(self) -> bool:
+        return True
+    
+    async def transcribe(self, audio_data: np.ndarray, language: str = "zh") -> str:
         """
         转录单个音频片段
         
@@ -186,55 +191,6 @@ class WhisperSageMakerStreamingModel:
             logger.error(f"转录音频失败: {e}")
             return ""
     
-    async def transcribe_stream(self, 
-                              audio_stream: AsyncGenerator[np.ndarray, None],
-                              language: str = "ar") -> AsyncGenerator[Subtitle, None]:
-        """流式转录音频"""
-        logger.info(f"Starting SageMaker Whisper streaming transcription for language: {language}")
-        
-        try:
-            # 直接处理传入的音频流
-            # 这里假设音频流已经经过VAD处理，每个块都是一个语音片段
-            async for audio_chunk in audio_stream:
-                # 确保音频数据是float32格式
-                if audio_chunk.dtype != np.float32:
-                    audio_chunk = audio_chunk.astype(np.float32)
-                
-                # 转换为WAV格式
-                # 转换为16-bit PCM
-                audio_int16 = (audio_chunk * 32767).astype(np.int16)
-                
-                # 创建WAV文件
-                wav_buffer = io.BytesIO()
-                with wave.open(wav_buffer, 'wb') as wav_file:
-                    wav_file.setnchannels(1)  # 单声道
-                    wav_file.setsampwidth(2)  # 16-bit
-                    wav_file.setframerate(self.config.sample_rate)
-                    wav_file.writeframes(audio_int16.tobytes())
-                
-                wav_data = wav_buffer.getvalue()
-                
-                # 异步转录
-                result = await self._async_transcribe(wav_data, language)
-                
-                if result and result.get('transcription'):
-                    text = result.get('transcription', '').strip()
-                    
-                    if text:
-                        # 创建字幕对象（时间戳将在外部设置）
-                        subtitle = Subtitle(
-                            start=0,  # 将在外部设置
-                            end=0,    # 将在外部设置
-                            text=text
-                        )
-                        
-                        logger.debug(f"生成字幕: {subtitle}")
-                        yield subtitle
-                    
-        except Exception as e:
-            logger.error(f"Error in SageMaker Whisper streaming: {e}")
-            raise
-            
     async def _async_transcribe(self, wav_data: bytes, language: str) -> Dict[str, Any]:
         """异步转录音频数据"""
         loop = asyncio.get_event_loop()

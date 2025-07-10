@@ -7,5 +7,7 @@ __author__ = "234aini@gmail.com"
 
 from .core.generator import SubtitleGenerator
 from .core.config import Config
+from .core.segment_processor import AudioSegmentProcessor
+from .core.segment_processor_config import AudioSegmentProcessorConfig, segment_processor_config
 
-__all__ = ["SubtitleGenerator", "Config"]
+__all__ = ["SubtitleGenerator", "Config", "AudioSegmentProcessor", "AudioSegmentProcessorConfig", "segment_processor_config"]

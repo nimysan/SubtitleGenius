@@ -44,6 +44,9 @@ class Config(BaseSettings):
     aws_region: str = Field(default="us-east-1", env="AWS_REGION")
     aws_s3_bucket: str = Field(default="subtitle-genius-temp", env="AWS_S3_BUCKET")
     
+    # SageMaker配置
+    sagemaker_endpoint_name: str = Field(default="endpoint-quick-start-z9afg", env="SAGEMAKER_ENDPOINT_NAME")
+    
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
