@@ -180,7 +180,8 @@ class BedrockCorrectionService(SubtitleCorrectionService):
 场景: {input_data.scene_description}
 当前字幕: {input_data.current_subtitle}{history_context}
 
-{scene_guidance}
+
+视频场景是: {scene_guidance}
 
 请检查并纠正以下类型的错误:
 1. 拼写错误
@@ -197,6 +198,11 @@ class BedrockCorrectionService(SubtitleCorrectionService):
 3. 在自然的断句点进行拆分（如逗号、分号等位置）
 4. 拆分后的每个句子长度应相对均衡
 
+## 结果说明
+1. 不要填补， 只做word错误修复。比如：不要把一个词换成另外一个词，尝试尽可能的还原最可能出现的词
+2. 不要把上下文填补到当前字幕句子中，字幕历史记录是用来参考的，不要总结和合并
+
+## 输出格式说明
 请以JSON格式返回结果:
 {{
     "corrected_text": "纠正后的字幕文本",
