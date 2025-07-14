@@ -8,19 +8,16 @@ const DashPlayer = ({ dashUrl }) => {
   const [playerState, setPlayerState] = useState({
     isPlaying: false,
     currentTime: 0,
-    duration: 0,
-    bufferLevel: 0,
-    bitrate: 0,
-    qualityIndex: 0
+    duration: 0
   });
 
   // 初始化 DASH 播放器
   useEffect(() => {
     if (!dashUrl || !videoRef.current) return;
     
-    // 如果已经有播放器实例，先销毁
+    // 如果已经有播放器实例，先重置
     if (playerRef.current) {
-      playerRef.current.destroy();
+      playerRef.current.reset();
       playerRef.current = null;
     }
     
@@ -30,44 +27,31 @@ const DashPlayer = ({ dashUrl }) => {
     
     // 初始化播放器
     player.initialize(videoRef.current, dashUrl, true); // 自动播放
-    player.updateSettings({
-      'debug': {
-        'logLevel': dashjs.Debug.LOG_LEVEL_INFO
-      },
-      'streaming': {
-        'abr': {
-          'autoSwitchBitrate': true
-        }
-      }
-    });
     
     // 监听播放器事件
-    player.on(dashjs.MediaPlayer.events.PLAYBACK_METADATA_LOADED, () => {
-      console.log('DASH 元数据已加载');
-    });
-    
     player.on(dashjs.MediaPlayer.events.ERROR, (e) => {
       console.error('DASH 播放器错误:', e);
     });
     
-    // 定期更新播放器状态
+    // 简化的状态更新，避免使用可能不兼容的API
     const interval = setInterval(() => {
       if (player) {
-        setPlayerState({
-          isPlaying: !player.isPaused(),
-          currentTime: player.time(),
-          duration: player.duration(),
-          bufferLevel: player.getBufferLength(),
-          bitrate: Math.round(player.getAverageThroughput('video') / 1000),
-          qualityIndex: player.getQualityFor('video')
-        });
+        try {
+          setPlayerState({
+            isPlaying: !player.isPaused(),
+            currentTime: player.time(),
+            duration: player.duration()
+          });
+        } catch (error) {
+          console.error('更新播放器状态时出错:', error);
+        }
       }
     }, 1000);
     
     return () => {
       clearInterval(interval);
       if (playerRef.current) {
-        playerRef.current.destroy();
+        playerRef.current.reset();
         playerRef.current = null;
       }
     };
@@ -90,6 +74,7 @@ const DashPlayer = ({ dashUrl }) => {
             className="dash-video-player"
             controls
             autoPlay
+            style={{ width: '100%', height: 'auto' }}
           >
             您的浏览器不支持视频播放。
           </video>
@@ -104,18 +89,6 @@ const DashPlayer = ({ dashUrl }) => {
               <span className="dash-info-value">
                 {formatTime(playerState.currentTime)} / {formatTime(playerState.duration)}
               </span>
-            </div>
-            <div className="dash-info-item">
-              <span className="dash-info-label">缓冲:</span>
-              <span className="dash-info-value">{playerState.bufferLevel.toFixed(1)}秒</span>
-            </div>
-            <div className="dash-info-item">
-              <span className="dash-info-label">比特率:</span>
-              <span className="dash-info-value">{playerState.bitrate} kbps</span>
-            </div>
-            <div className="dash-info-item">
-              <span className="dash-info-label">清晰度:</span>
-              <span className="dash-info-value">质量 {playerState.qualityIndex}</span>
             </div>
             <div className="dash-info-item">
               <span className="dash-info-label">URL:</span>
