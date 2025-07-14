@@ -26,14 +26,131 @@
 }
 
 .App-main {
-  display: grid;
-  grid-template-columns: 2fr 1fr;
-  grid-template-rows: 1fr auto;
-  gap: 20px;
   padding: 20px;
   max-width: 1400px;
   margin: 0 auto;
   min-height: calc(100vh - 140px);
+}
+
+/* 标签页内容布局 */
+.react-tabs__tab-panel {
+  width: 100%;
+}
+
+.react-tabs__tab-panel--selected {
+  display: block;
+}
+
+/* 视频字幕标签页内容布局 */
+.video-subtitle-container {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  grid-template-rows: 1fr auto;
+  gap: 20px;
+}
+
+/* DASH标签页布局 */
+.dash-tab-container {
+  width: 100%;
+}
+
+/* React Tabs 自定义样式 */
+.react-tabs {
+  width: 100%;
+}
+
+.react-tabs__tab-list {
+  border-bottom: 2px solid rgba(255, 255, 255, 0.2);
+  margin: 0 0 20px;
+  padding: 0;
+  display: flex;
+}
+
+.react-tabs__tab {
+  display: inline-block;
+  border: none;
+  border-bottom: 2px solid transparent;
+  bottom: -2px;
+  position: relative;
+  list-style: none;
+  padding: 10px 20px;
+  cursor: pointer;
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 600;
+  transition: all 0.3s ease;
+  margin-right: 10px;
+}
+
+.react-tabs__tab--selected {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: #fff;
+  color: #fff;
+  border-radius: 8px 8px 0 0;
+}
+
+.react-tabs__tab:focus {
+  outline: none;
+}
+
+.react-tabs__tab:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.react-tabs__tab-panel {
+  display: none;
+  width: 100%;
+}
+
+.react-tabs__tab-panel--selected {
+  display: block;
+}
+
+/* DASH播放器标签页样式 */
+.dash-tab-container {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  width: 100%;
+}
+
+.dash-input-container {
+  width: 100%;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.dash-url-input {
+  width: 100%;
+  padding: 12px 15px;
+  border-radius: 8px;
+  border: 1px solid rgba(255, 255, 255, 0.3);
+  background: rgba(0, 0, 0, 0.2);
+  color: white;
+  font-size: 16px;
+  transition: all 0.3s ease;
+}
+
+.dash-url-input:focus {
+  outline: none;
+  border-color: #764ba2;
+  box-shadow: 0 0 0 2px rgba(118, 75, 162, 0.3);
+}
+
+.dash-url-input::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+}
+
+.dash-player-section {
+  width: 100%;
+  background: rgba(0, 0, 0, 0.2);
+  border-radius: 15px;
+  padding: 20px;
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
 }
 
 .video-section {
@@ -259,7 +376,23 @@
 
 /* 响应式设计 */
 @media (max-width: 1024px) {
-  .App-main {
+  /* 标签页响应式样式 */
+  .react-tabs__tab {
+    padding: 8px 15px;
+    font-size: 0.9rem;
+  }
+  
+  .dash-input-container {
+    padding: 15px;
+  }
+  
+  .dash-url-input {
+    padding: 10px;
+    font-size: 14px;
+  }
+  
+  /* 标签页内容响应式布局 */
+  .video-subtitle-container {
     grid-template-columns: 1fr;
     grid-template-rows: auto auto auto;
     min-height: auto;
@@ -309,6 +442,22 @@
 @media (max-width: 768px) {
   .App-header h1 {
     font-size: 2rem;
+  }
+  
+  /* 小屏幕标签页样式 */
+  .react-tabs__tab {
+    padding: 6px 12px;
+    font-size: 0.85rem;
+    margin-right: 5px;
+  }
+  
+  .dash-input-container {
+    padding: 12px;
+  }
+  
+  .dash-url-input {
+    padding: 8px;
+    font-size: 13px;
   }
   
   .App-main {

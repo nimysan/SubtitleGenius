@@ -1,12 +1,16 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { Tab, Tabs, TabList, TabPanel } from 'react-tabs';
+import 'react-tabs/style/react-tabs.css';
 import './App.css';
 import VideoPlayer from './components/VideoPlayer';
+import DashPlayer from './components/DashPlayer';
 import SubtitleDisplay from './components/SubtitleDisplay';
 import ControlPanel from './components/ControlPanel';
 import { convertToWAV, createWebSocketConnection, sendAudioData, createSaveSubtitlesConnection } from './utils/AudioUtils';
 
 function App() {
   const [videoFile, setVideoFile] = useState(null);
+  const [dashUrl, setDashUrl] = useState(''); // DASH URL状态
   const [subtitles, setSubtitles] = useState([]);
   const [currentTime, setCurrentTime] = useState(0);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -20,6 +24,7 @@ function App() {
   const [targetLanguage, setTargetLanguage] = useState('en'); // 翻译目标语言
   const [clientId, setClientId] = useState(null); // 客户端ID
   const [saveStatus, setSaveStatus] = useState({ saving: false, message: '', success: false });
+  const [tabIndex, setTabIndex] = useState(0); // 当前选中的标签页索引
   
   const videoRef = useRef(null);
   const audioChunksRef = useRef([]);
@@ -320,6 +325,11 @@ function App() {
     };
   }, [socket]);
 
+  // 处理DASH URL输入
+  const handleDashUrlChange = (e) => {
+    setDashUrl(e.target.value);
+  };
+
   return (
     <div className="App">
       <header className="App-header">
@@ -328,72 +338,103 @@ function App() {
       </header>
 
       <main className="App-main">
-        <div className="video-section">
-          <VideoPlayer
-            videoFile={videoFile}
-            onTimeUpdate={handleTimeUpdate}
-            onAudioData={handleAudioData}
-            ref={videoRef}
-          />
-          
-          {/* 最新字幕直接显示在视频下方 */}
-          {subtitles.length > 0 && (
-            <div className="latest-subtitle-overlay">
-              <div className="latest-subtitle-content">
-                <div className="latest-subtitle-label">
-                  <div className="label-left">
-                    <span>最新字幕</span>
-                    <div className="live-indicator">
-                      <span className="live-dot"></span>
-                      <span>LIVE</span>
+        <Tabs selectedIndex={tabIndex} onSelect={index => setTabIndex(index)}>
+          <TabList>
+            <Tab>视频字幕</Tab>
+            <Tab>DASH播放器</Tab>
+          </TabList>
+
+          <TabPanel>
+            {/* 原有的视频字幕功能 */}
+            <div className="video-subtitle-container">
+              <div className="video-section">
+                <VideoPlayer
+                  videoFile={videoFile}
+                  onTimeUpdate={handleTimeUpdate}
+                  onAudioData={handleAudioData}
+                  ref={videoRef}
+                />
+                
+                {/* 最新字幕直接显示在视频下方 */}
+                {subtitles.length > 0 && (
+                  <div className="latest-subtitle-overlay">
+                    <div className="latest-subtitle-content">
+                      <div className="latest-subtitle-label">
+                        <div className="label-left">
+                          <span>最新字幕</span>
+                          <div className="live-indicator">
+                            <span className="live-dot"></span>
+                            <span>LIVE</span>
+                          </div>
+                        </div>
+                        <div className="subtitle-info-inline">
+                          <span className="subtitle-time">
+                            [{formatTime(subtitles[subtitles.length - 1].start)} - {formatTime(subtitles[subtitles.length - 1].end)}]
+                          </span>
+                        </div>
+                      </div>
+                      <div className="subtitle-text-container">
+                        <div className={`original-text ${selectedLanguage === 'ar' ? 'text-direction-rtl' : 'text-direction-ltr'}`}>
+                          {subtitles[subtitles.length - 1].text}
+                        </div>
+                        {subtitles[subtitles.length - 1].translated_text && (
+                          <div className="translated-text">{subtitles[subtitles.length - 1].translated_text}</div>
+                        )}
+                      </div>
                     </div>
                   </div>
-                  <div className="subtitle-info-inline">
-                    <span className="subtitle-time">
-                      [{formatTime(subtitles[subtitles.length - 1].start)} - {formatTime(subtitles[subtitles.length - 1].end)}]
-                    </span>
-                  </div>
-                </div>
-                <div className="subtitle-text-container">
-                  <div className={`original-text ${selectedLanguage === 'ar' ? 'text-direction-rtl' : 'text-direction-ltr'}`}>
-                    {subtitles[subtitles.length - 1].text}
-                  </div>
-                  {subtitles[subtitles.length - 1].translated_text && (
-                    <div className="translated-text">{subtitles[subtitles.length - 1].translated_text}</div>
-                  )}
-                </div>
+                )}
+              </div>
+
+              <div className="subtitle-section">
+                <SubtitleDisplay
+                  subtitles={subtitles}
+                  currentTime={currentTime}
+                  onSaveSubtitles={handleSaveSubtitles}
+                  saveStatus={saveStatus}
+                  hasClientId={!!clientId}
+                  defaultLanguage={selectedLanguage}
+                />
+              </div>
+
+              <div className="app-control-section">
+                <ControlPanel
+                  onVideoUpload={handleVideoUpload}
+                  onGenerateSubtitles={handleGenerateSubtitles}
+                  onSettingsChange={handleSettingsChange}
+                  isProcessing={isProcessing}
+                  hasVideo={!!videoFile}
+                  selectedLanguage={selectedLanguage}
+                  selectedModel={selectedModel}
+                  isRealtime={isRealtime}
+                  debugMode={debugMode}
+                  enableCorrection={enableCorrection}
+                  enableTranslation={enableTranslation}
+                  targetLanguage={targetLanguage}
+                />
               </div>
             </div>
-          )}
-        </div>
+          </TabPanel>
 
-        <div className="subtitle-section">
-          <SubtitleDisplay
-            subtitles={subtitles}
-            currentTime={currentTime}
-            onSaveSubtitles={handleSaveSubtitles}
-            saveStatus={saveStatus}
-            hasClientId={!!clientId}
-            defaultLanguage={selectedLanguage}
-          />
-        </div>
-
-        <div className="app-control-section">
-          <ControlPanel
-            onVideoUpload={handleVideoUpload}
-            onGenerateSubtitles={handleGenerateSubtitles}
-            onSettingsChange={handleSettingsChange}
-            isProcessing={isProcessing}
-            hasVideo={!!videoFile}
-            selectedLanguage={selectedLanguage}
-            selectedModel={selectedModel}
-            isRealtime={isRealtime}
-            debugMode={debugMode}
-            enableCorrection={enableCorrection}
-            enableTranslation={enableTranslation}
-            targetLanguage={targetLanguage}
-          />
-        </div>
+          <TabPanel>
+            {/* DASH播放器标签页 */}
+            <div className="dash-tab-container">
+              <div className="dash-input-container">
+                <input
+                  type="text"
+                  className="dash-url-input"
+                  placeholder="输入DASH流URL (例如: http://localhost:8080/tv002/tv002.mpd)"
+                  value={dashUrl}
+                  onChange={handleDashUrlChange}
+                />
+              </div>
+              
+              <div className="dash-player-section">
+                <DashPlayer dashUrl={dashUrl} />
+              </div>
+            </div>
+          </TabPanel>
+        </Tabs>
       </main>
     </div>
   );
