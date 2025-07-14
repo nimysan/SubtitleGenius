@@ -16,6 +16,14 @@ logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
+# 添加CORS支持
+@app.after_request
+def add_cors_headers(response):
+    response.headers['Access-Control-Allow-Origin'] = '*'
+    response.headers['Access-Control-Allow-Headers'] = 'Content-Type, Authorization, Range'
+    response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
+    return response
+
 # 配置
 DASH_OUTPUT_DIR = "dash_output"
 SUBTITLE_BASE_URL = "https://dash.akamaized.net/akamai/test/caption_test/ElephantsDream/ElephantsDream_en.vtt"
