@@ -26,7 +26,7 @@ def add_cors_headers(response):
 
 # 配置
 DASH_OUTPUT_DIR = "dash_output"
-SUBTITLE_BASE_URL = "https://dash.akamaized.net/akamai/test/caption_test/ElephantsDream/ElephantsDream_en.vtt"
+# SUBTITLE_BASE_URL = "https://dash.akamaized.net/akamai/test/caption_test/ElephantsDream/ElephantsDream_en.vtt"
 
 def add_subtitle_to_mpd(mpd_content, program_id):
     """
@@ -59,17 +59,17 @@ def add_subtitle_to_mpd(mpd_content, program_id):
         # 创建字幕AdaptationSet
         subtitle_adaptation_set = ET.Element("AdaptationSet")
         subtitle_adaptation_set.set("mimeType", "text/vtt")
-        subtitle_adaptation_set.set("lang", "en")
+        subtitle_adaptation_set.set("lang", "zh")
         
         # 创建Representation
         representation = ET.SubElement(subtitle_adaptation_set, "Representation")
-        representation.set("id", "caption_en")
+        representation.set("id", "caption_zh")
         representation.set("bandwidth", "256")
         
         # 创建BaseURL
         base_url = ET.SubElement(representation, "BaseURL")
         # 可以根据program_id动态设置字幕URL
-        base_url.text = f"/tv002/{program_id}.vtt"
+        base_url.text = f"{program_id}.vtt"
         
         # 将字幕AdaptationSet添加到Period
         period.append(subtitle_adaptation_set)
