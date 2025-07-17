@@ -82,8 +82,19 @@ class WebSocketServer:
         config = self._parse_websocket_path(path)
         config['client_id'] = connection_id  # 使用连接ID作为客户端ID
         
-        # 为这个连接创建独立的音频处理器
-        audio_processor = ContinuousAudioProcessor(config)
+        # 定义字幕回调函数，用于将字幕发送回前端
+        async def subtitle_callback(result_data):
+            """字幕回调函数，将字幕发送回前端"""
+            try:
+                await websocket.send(json.dumps(result_data))
+                logger.info(f"通过回调函数发送字幕到前端: {result_data.get('subtitle', {}).get('text', 'N/A')}")
+            except Exception as e:
+                logger.error(f"回调函数发送字幕时出错: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+        
+        # 为这个连接创建独立的音频处理器，并传递回调函数
+        audio_processor = ContinuousAudioProcessor(config, result_callback=subtitle_callback)
         
         self.active_connections[connection_id] = {
             'websocket': websocket,
