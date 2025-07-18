@@ -128,7 +128,7 @@ class VideoSubtitleExtractor:
         """初始化音频处理器"""
         # 获取输入文件的基本名称（不含路径和扩展名）作为源标识符
         import os.path
-        source_id = os.path.basename(input_file)
+        source_id = os.path.basename(self.input_file)
         
         # 创建配置
         config = {
