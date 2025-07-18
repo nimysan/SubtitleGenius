@@ -126,13 +126,17 @@ class VideoSubtitleExtractor:
     
     async def initialize_processor(self):
         """初始化音频处理器"""
+        # 获取输入文件的基本名称（不含路径和扩展名）作为源标识符
+        import os.path
+        source_id = os.path.basename(input_file)
+        
         # 创建配置
         config = {
             'language': self.language,
             'correction': True,
             'translation': False,
             'model': 'whisper',
-            'client_id': 'video_subtitle_extractor'
+            'client_id': f'video_file_{source_id}'  # 使用文件名作为标识符的一部分
         }
         
         # 创建处理器

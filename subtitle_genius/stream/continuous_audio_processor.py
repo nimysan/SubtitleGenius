@@ -106,6 +106,9 @@ class ContinuousAudioProcessor:
             source_id=self.client_id  # 使用client_id作为音频源标识符
         )
         
+        # 记录音频源标识符
+        logger.info(f"使用音频源标识符: {self.client_id}")
+        
         # 注册指标收集
         if METRICS_AVAILABLE:
             try:
