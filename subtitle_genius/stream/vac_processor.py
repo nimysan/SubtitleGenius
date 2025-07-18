@@ -13,6 +13,14 @@ from typing import Iterator, List, Dict, Any, Optional, Callable
 from loguru import logger
 from collections import deque
 
+# 导入指标收集模块
+try:
+    from ..metrics.vac_metrics import get_vac_metrics
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    logger.warning("Metrics module not available, metrics collection disabled")
+
 # 添加whisper_streaming目录到路径
 sys.path.append(os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'whisper_streaming'))
 from silero_vad_iterator import FixedVADIterator
@@ -82,6 +90,16 @@ class VACProcessor:
         self._audio_buffer = deque(maxlen=max_buffer_chunks)  # 存储音频数据，限制最大长度
         self._current_start_time = None  # 当前语音段的开始时间
         self._current_start_sample = None  # 当前语音段的开始样本位置
+        
+        # 初始化指标收集
+        self.metrics_enabled = METRICS_AVAILABLE
+        if self.metrics_enabled:
+            try:
+                self.metrics = get_vac_metrics()
+                logger.info("VAC metrics collection enabled")
+            except Exception as e:
+                logger.error(f"Failed to initialize metrics: {e}")
+                self.metrics_enabled = False
         
         logger.info(f"VACProcessor initialized with parameters:")
         logger.info(f"  threshold: {self.threshold}")
@@ -175,6 +193,10 @@ class VACProcessor:
                 # 将音频块添加到缓存
                 self._audio_buffer.append((audio_chunk.copy(), total_samples_processed))
                 
+                # 更新缓冲区指标
+                if self.metrics_enabled and len(self._audio_buffer) % 10 == 0:  # 每10个块更新一次，避免过于频繁
+                    self._update_buffer_metrics()
+                
                 # 清理过旧的缓冲区数据，保持内存使用合理
                 current_time = total_samples_processed / self.sample_rate
                 buffer_start_time = current_time - self.buffer_duration
@@ -214,6 +236,13 @@ class VACProcessor:
                                 self._current_start_time = result['start']
                                 self._current_start_sample = int(result['start'] * self.sample_rate)
                                 logger.info(f"检测到语音开始: {self._current_start_time:.2f}s")
+                                
+                                # 记录VAD开始事件指标
+                                if self.metrics_enabled:
+                                    try:
+                                        self.metrics.observe_vad_event("start")
+                                    except Exception as e:
+                                        logger.error(f"Failed to record VAD start event metric: {e}")
                             else:
                                 # 如果已经有活跃的语音段，忽略新的start事件
                                 logger.debug(f"忽略重复的start事件: {result['start']:.2f}s (当前活跃段: {self._current_start_time:.2f}s)")
@@ -244,6 +273,14 @@ class VACProcessor:
                             logger.info(f"检测到语音结束: {end_time:.2f}s, 时长: {speech_segment['duration']:.2f}s, " +
                                        f"音频完整性: {audio_metadata['completeness']:.1f}%")
                             
+                            # 记录VAD结束事件指标
+                            if self.metrics_enabled:
+                                try:
+                                    self.metrics.observe_vad_event("end")
+                                    self.metrics.observe_speech_segment(speech_segment)
+                                except Exception as e:
+                                    logger.error(f"Failed to record VAD end event metrics: {e}")
+                            
                             # 🚀 发射事件 - 确保只触发一次
                             if self.on_speech_segment:
                                 try:
@@ -261,6 +298,13 @@ class VACProcessor:
                         elif 'end' in result and self._current_start_time is None:
                             # 收到end事件但没有对应的start事件，记录警告
                             logger.warning(f"收到孤立的end事件: {result['end']:.2f}s (没有对应的start事件)")
+                            
+                            # 记录孤立的VAD结束事件指标
+                            if self.metrics_enabled:
+                                try:
+                                    self.metrics.observe_vad_event("orphaned_end")
+                                except Exception as e:
+                                    logger.error(f"Failed to record orphaned VAD end event metric: {e}")
                 
                 # 检查是否超过无音频输入阈值
                 if time.time() - last_audio_time > self.no_audio_input_threshold:
@@ -311,6 +355,14 @@ class VACProcessor:
                 results.append({'end': end_time})
                 logger.info(f"检测到未结束的语音段，强制结束于 {end_time:.2f}秒, " +
                            f"音频完整性: {audio_metadata['completeness']:.1f}%")
+                
+                # 记录最终语音段指标
+                if self.metrics_enabled:
+                    try:
+                        self.metrics.observe_vad_event("end")
+                        self.metrics.observe_speech_segment(speech_segment)
+                    except Exception as e:
+                        logger.error(f"Failed to record final speech segment metrics: {e}")
                 
                 # 🚀 发射最终事件
                 if self.on_speech_segment:
@@ -457,6 +509,26 @@ class VACProcessor:
                 start_time = None
         
         return segments
+
+
+    def _update_buffer_metrics(self):
+        """更新缓冲区相关指标"""
+        if not self.metrics_enabled:
+            return
+            
+        try:
+            buffer_chunks = len(self._audio_buffer)
+            buffer_duration = 0
+            buffer_size_bytes = 0
+            
+            for chunk, _ in self._audio_buffer:
+                buffer_duration += len(chunk) / self.sample_rate
+                buffer_size_bytes += len(chunk) * 4  # float32 = 4 bytes
+            
+            self.metrics.update_buffer_metrics(buffer_chunks, buffer_duration, buffer_size_bytes)
+            logger.debug(f"Updated buffer metrics: chunks={buffer_chunks}, duration={buffer_duration:.2f}s, size={buffer_size_bytes} bytes")
+        except Exception as e:
+            logger.error(f"Failed to update buffer metrics: {e}")
 
 
 # 便利函数，保持向后兼容性
