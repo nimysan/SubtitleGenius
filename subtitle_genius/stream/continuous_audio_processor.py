@@ -32,6 +32,14 @@ from subtitle_genius.models.whisper_sagemaker_streaming import WhisperSageMakerS
 from subtitle_genius.pipeline.subtitle_pipeline import SubtitlePipeline
 from subtitle_genius.subtitle.models import Subtitle
 
+# 导入指标收集模块
+try:
+    from subtitle_genius.metrics.vac_metrics import register_vac_metrics
+    METRICS_AVAILABLE = True
+except ImportError:
+    METRICS_AVAILABLE = False
+    logger.warning("Metrics module not available, metrics collection disabled")
+
 # 配置日志
 logger = logging.getLogger(__name__)
 
@@ -94,8 +102,19 @@ class ContinuousAudioProcessor:
             sample_rate=16000,
             processing_chunk_size=512,  # VAC处理器的处理块大小
             no_audio_input_threshold=5.0,
-            on_speech_segment=self._on_speech_segment_sync
+            on_speech_segment=self._on_speech_segment_sync,
+            source_id=self.client_id  # 使用client_id作为音频源标识符
         )
+        
+        # 注册指标收集
+        if METRICS_AVAILABLE:
+            try:
+                self.metrics = register_vac_metrics(self.vac_processor)
+                logger.info(f"VAC指标收集已注册，音频源标识符: {self.client_id}")
+            except Exception as e:
+                logger.error(f"注册VAC指标收集失败: {e}")
+        else:
+            logger.warning("指标模块不可用，VAC指标收集已禁用")
         
         # 存储活跃的连接（如果使用WebSocket）
         self.active_connections = {}
